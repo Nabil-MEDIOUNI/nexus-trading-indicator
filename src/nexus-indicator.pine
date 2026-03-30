@@ -505,6 +505,17 @@ var array<float> smc_lows       = array.new<float>()
 var array<int> smc_times        = array.new<int>()
 var smc_initialTime             = time
 
+// --- Premium/Discount Zone Variables ---
+var array<float> pd_highs  = array.new_float(0)
+var array<float> pd_lows   = array.new_float(0)
+var array<float> pd_posVol = array.new_float(0)
+var array<float> pd_negVol = array.new_float(0)
+var float pd_deltaVol      = na
+var box pd_upperBox         = na
+var box pd_lowerBox         = na
+var box pd_midBox            = na
+var line pd_eqLine           = na
+
 smc_atrMeasure = ta.atr(ATR_PERIOD_SWING)
 
 // Store price data (capped at SMC_MAX_ARRAY_SIZE to prevent unbounded memory growth)
@@ -704,6 +715,66 @@ if barstate.islastconfirmedhistory or (barstate.isrealtime and smc_newBar)
 
     if show_smc and smc_show_monthly and not smc_higherTF("M")
         smc_drawLevels("M", timeframe.ismonthly, smc_monthly_style, smc_monthly_color)
+
+// Premium/Discount Zones (lookback-based with delta volume)
+if show_smc and smc_show_zones and barstate.islast
+    pd_atr = ta.atr(200) * 0.8
+    pd_startIdx = bar_index - smc_zone_lookback
+    pd_endIdx   = bar_index + 50
+
+    // Collect data over lookback period
+    array.clear(pd_highs)
+    array.clear(pd_lows)
+
+    // Resize volume arrays
+    while pd_posVol.size() < smc_zone_lookback
+        pd_posVol.push(0.)
+    while pd_negVol.size() < smc_zone_lookback
+        pd_negVol.push(0.)
+    while pd_posVol.size() > smc_zone_lookback
+        pd_posVol.pop()
+    while pd_negVol.size() > smc_zone_lookback
+        pd_negVol.pop()
+
+    for i = 0 to smc_zone_lookback - 1
+        array.push(pd_highs, high[i])
+        array.push(pd_lows, low[i])
+        if close[i] > open[i]
+            pd_posVol.set(i, volume[i])
+            pd_negVol.set(i, 0.)
+        else if close[i] < open[i]
+            pd_negVol.set(i, -volume[i])
+            pd_posVol.set(i, 0.)
+        else
+            pd_posVol.set(i, 0.)
+            pd_negVol.set(i, 0.)
+
+    // Calculate delta volume
+    pd_posAvg = pd_posVol.avg()
+    pd_deltaVol := pd_posAvg != 0 ? (pd_negVol.avg() / pd_posAvg + 1) * 100 : 0
+    pd_deltaVol := math.min(math.max(pd_deltaVol, -100), 100)
+
+    pd_hiMax = pd_highs.max()
+    pd_loMin = pd_lows.min()
+
+    // Delete previous boxes and line
+    box.delete(pd_upperBox[1])
+    box.delete(pd_lowerBox[1])
+    box.delete(pd_midBox[1])
+    line.delete(pd_eqLine[1])
+
+    // Premium box (around highest highs)
+    pd_upperBox := box.new(pd_startIdx, pd_hiMax + pd_atr, pd_endIdx, pd_hiMax, smc_premium_color, 1, bgcolor=color.new(smc_premium_color, 100), text="PREMIUM: " + str.tostring(pd_negVol.sum(), format.volume), text_size=size.small, text_color=chart.fg_color, force_overlay=true)
+
+    // Discount box (around lowest lows)
+    pd_lowerBox := box.new(pd_startIdx, pd_loMin, pd_endIdx, pd_loMin - pd_atr, smc_discount_color, 1, bgcolor=color.new(smc_discount_color, 100), text="DISCOUNT: " + str.tostring(pd_posVol.sum(), format.volume), text_size=size.small, text_color=chart.fg_color, force_overlay=true)
+
+    // Equilibrium line (true 0.5)
+    pd_eqLevel = math.avg(pd_loMin, pd_hiMax)
+    pd_eqLine := line.new(pd_startIdx, pd_eqLevel, pd_endIdx, pd_eqLevel, color=chart.fg_color, style=line.style_dashed)
+
+    // Mid-zone box with delta volume
+    pd_midBox := box.new(pd_startIdx, pd_hiMax, pd_endIdx, pd_loMin, na, 0, bgcolor=color.new(pd_deltaVol > 0 ? smc_discount_color : smc_premium_color, 93), text="Delta Volume\n" + str.tostring(pd_deltaVol, format.percent), text_size=size.normal, text_color=pd_deltaVol > 0 ? smc_discount_color : smc_premium_color, text_halign=text.align_right, text_valign=text.align_bottom)
 
 // ============================================================================
 //                    MODULE: ChoCH / BOS (Market Structure)
