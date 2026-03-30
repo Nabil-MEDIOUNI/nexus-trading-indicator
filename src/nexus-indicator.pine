@@ -444,10 +444,10 @@ smc_monthly_color  = input.color(#2157f3, "", inline="monthly", group="SMC - MTF
 
 // --- Settings: Zones ---
 
-smc_show_zones     = input.bool(true, "Premium/Discount Zones", group="SMC - Zones")
-smc_premium_color  = input.color(#f7525f, "Premium", inline="zone_col", group="SMC - Zones")
-smc_equil_color    = input.color(#878b94, "Equilibrium", inline="zone_col", group="SMC - Zones")
-smc_discount_color = input.color(#22ab94, "Discount", inline="zone_col", group="SMC - Zones")
+smc_show_zones     = input.bool(true, "", inline="pd_toggle", group="SMC - Zones")
+smc_zone_lookback  = input.int(10, "Premium & Discount Lookback Period", minval=5, step=5, inline="pd_toggle", group="SMC - Zones", tooltip="Lookback period for Premium & Discount Levels with Delta Volume")
+smc_discount_color = input.color(#79c1f1, "Discount", inline="zone_col", group="SMC - Zones")
+smc_premium_color  = input.color(#f19579, "Premium", inline="zone_col", group="SMC - Zones")
 
 // --- Constants ---
 
@@ -668,28 +668,10 @@ smc_drawLevels(string tf, bool sameTF, string style, color levelColor) =>
     bottomLine.set_second_point(chart.point.new(rightEdge, na, parsedBottom))
     bottomLabel.set_point(chart.point.new(rightEdge, na, parsedBottom))
 
-// Draw zone helper
-smc_drawZone(float labelLevel, int labelIndex, float top, float bottom, string tag, color zoneColor, string style, int opacity = 100) =>
-    var label l = label.new(na, na, text=tag, color=COLOR_TRANSPARENT, textcolor=zoneColor, style=style, size=size.small)
-    var box b = box.new(na, na, na, na, bgcolor=color.new(zoneColor, opacity), border_color=COLOR_TRANSPARENT, xloc=xloc.bar_time)
-
-    b.set_top_left_point(chart.point.new(smc_trail.barTime, na, top))
-    b.set_bottom_right_point(chart.point.new(last_bar_time, na, bottom))
-    l.set_point(chart.point.new(na, labelIndex, labelLevel))
-
-// Draw Premium/Discount Zones
-smc_drawPremiumDiscount() =>
-    smc_drawZone(smc_trail.top, math.round(0.5 * (smc_trail.barIndex + last_bar_index)), smc_trail.top, 0.95 * smc_trail.top + 0.05 * smc_trail.bottom, "Premium", smc_premium_color, label.style_label_down)
-
-    equilibriumLevel = math.avg(smc_trail.top, smc_trail.bottom)
-    smc_drawZone(equilibriumLevel, last_bar_index, 0.525 * smc_trail.top + 0.475 * smc_trail.bottom, 0.525 * smc_trail.bottom + 0.475 * smc_trail.top, "Equilibrium", smc_equil_color, label.style_label_left, 80)
-
-    smc_drawZone(smc_trail.bottom, math.round(0.5 * (smc_trail.barIndex + last_bar_index)), 0.95 * smc_trail.bottom + 0.05 * smc_trail.top, smc_trail.bottom, "Discount", smc_discount_color, label.style_label_up)
-
 // --- Execution ---
 
 // Update trailing and structure
-if show_smc and (smc_show_hl or smc_show_zones)
+if show_smc and smc_show_hl
     smc_updateTrailing()
 
 // Get swing structure (needed for Strong/Weak detection)
@@ -705,10 +687,6 @@ if show_smc and smc_show_hl
 // Get EQH/EQL structure
 if show_smc and smc_show_eqhl
     smc_getCurrentStructure(smc_eqhl_len, true)
-
-// Premium/Discount Zones
-if show_smc and smc_show_zones
-    smc_drawPremiumDiscount()
 
 // MTF Levels - draw on last confirmed bar or realtime
 varip int smc_currentBarIndex = bar_index
