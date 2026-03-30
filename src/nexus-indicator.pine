@@ -23,6 +23,11 @@ show_liq              = input.bool(true, "Liquidity Swings", group="Module Toggl
 show_candle_patterns  = input.bool(true, "Candlestick Patterns", group="Module Toggles")
 show_confluence_table = input.bool(true, "Confluence Table", group="Module Toggles")
 
+// --- Confluence Settings ---
+conf_show_details    = input.bool(true, "Show Details", group="Confluence", tooltip="Show individual factor rows. Disable to show only Direction and Score.")
+conf_tbl_position    = input.string("Top Right", "Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="Confluence")
+conf_alert_threshold = input.int(6, "Alert Threshold", minval=1, maxval=9, group="Confluence", tooltip="Alert when confluence score reaches this level")
+
 // ============================================================================
 //                        SHARED CONSTANTS
 // ============================================================================
@@ -1293,6 +1298,107 @@ bias_combined() =>
 
 bias_color(int b) => b == 1 ? COLOR_BULL : b == -1 ? COLOR_BEAR : COLOR_NEUTRAL
 
+// ============================================================================
+//                     MODULE: CONFLUENCE TABLE
+// ============================================================================
+// 9-factor scoring: CHoCH + EMA on W, D, 4H, 1H + Session.
+// All factors evaluated on fixed timeframes via request.security().
+// Score is identical regardless of chart timeframe.
+
+// --- Helper functions ---
+
+conf_arrow(int val) => val == 1 ? "▲" : val == -1 ? "▼" : "―"
+
+choch_tip(string tf, int b) =>
+    b == 1 ? tf + ": Close broke above swing high" : b == -1 ? tf + ": Close broke below swing low" : tf + ": No change of character"
+
+ema_tip(string tf, int b) =>
+    b == 1 ? tf + ": EMA 50 above EMA 100 & 200" : b == -1 ? tf + ": EMA 50 below EMA 100 & 200" : tf + ": EMAs mixed"
+
+conf_tbl_pos = switch conf_tbl_position
+    "Top Right"    => position.top_right
+    "Top Left"     => position.top_left
+    "Bottom Right" => position.bottom_right
+    "Bottom Left"  => position.bottom_left
+
+// --- Scoring ---
+conf_bull_count = (bias_w == 1 ? 1 : 0) + (bias_d == 1 ? 1 : 0) + (bias_4h == 1 ? 1 : 0) + (bias_1h == 1 ? 1 : 0) + (ema_w == 1 ? 1 : 0) + (ema_d == 1 ? 1 : 0) + (ema_4h == 1 ? 1 : 0) + (ema_1h == 1 ? 1 : 0)
+conf_bear_count = (bias_w == -1 ? 1 : 0) + (bias_d == -1 ? 1 : 0) + (bias_4h == -1 ? 1 : 0) + (bias_1h == -1 ? 1 : 0) + (ema_w == -1 ? 1 : 0) + (ema_d == -1 ? 1 : 0) + (ema_4h == -1 ? 1 : 0) + (ema_1h == -1 ? 1 : 0)
+
+// Session factor
+conf_session_active = timeframe.isintraday ? (nz(time(timeframe.period, "1300-2200", syminfo.timezone)) > 0 or nz(time(timeframe.period, "0700-1600", syminfo.timezone)) > 0) : true
+conf_session_score = conf_session_active ? 1 : 0
+
+// Direction: majority vote
+conf_direction = conf_bull_count > conf_bear_count ? 1 : conf_bear_count > conf_bull_count ? -1 : 0
+
+// Score: count signals aligned with majority direction + session
+conf_score = (conf_direction == 1 ? conf_bull_count : conf_direction == -1 ? conf_bear_count : 0) + conf_session_score
+
+// Direction labels
+conf_dir_text = conf_direction == 1 ? "LONG ▲" : conf_direction == -1 ? "SHORT ▼" : "NEUTRAL ―"
+conf_dir_color = conf_direction == 1 ? COLOR_BULL : conf_direction == -1 ? COLOR_BEAR : COLOR_NEUTRAL
+
+// Session text
+conf_ses_text = not timeframe.isintraday ? "Always On" : conf_session_active ? (nz(time(timeframe.period, "1300-2200", syminfo.timezone)) > 0 ? "NY Open" : "London") : "Off Hours"
+
+// --- Table ---
+var table conf_tbl = table.new(conf_tbl_pos, 3, 9, border_width=1)
+
+if show_confluence_table and barstate.islast
+    int row = 0
+
+    if conf_show_details
+        // Header row
+        table.cell(conf_tbl, 0, row, "",        text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, "CHoCH",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip="Change of Character - structure direction")
+        table.cell(conf_tbl, 2, row, "EMA",     text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip="EMA 50/100/200 alignment")
+        row += 1
+
+        // Weekly
+        table.cell(conf_tbl, 0, row, "Weekly",  text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_arrow(bias_w), text_color=bias_color(bias_w), text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("W", bias_w))
+        table.cell(conf_tbl, 2, row, conf_arrow(ema_w),  text_color=bias_color(ema_w),  text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("W", ema_w))
+        row += 1
+
+        // Daily
+        table.cell(conf_tbl, 0, row, "Daily",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_arrow(bias_d), text_color=bias_color(bias_d), text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("D", bias_d))
+        table.cell(conf_tbl, 2, row, conf_arrow(ema_d),  text_color=bias_color(ema_d),  text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("D", ema_d))
+        row += 1
+
+        // 4H
+        table.cell(conf_tbl, 0, row, "4H",      text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_arrow(bias_4h), text_color=bias_color(bias_4h), text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("4H", bias_4h))
+        table.cell(conf_tbl, 2, row, conf_arrow(ema_4h),  text_color=bias_color(ema_4h),  text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("4H", ema_4h))
+        row += 1
+
+        // 1H
+        table.cell(conf_tbl, 0, row, "1H",      text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_arrow(bias_1h), text_color=bias_color(bias_1h), text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("1H", bias_1h))
+        table.cell(conf_tbl, 2, row, conf_arrow(ema_1h),  text_color=bias_color(ema_1h),  text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("1H", ema_1h))
+        row += 1
+
+        // Session row
+        table.cell(conf_tbl, 0, row, "Session", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_ses_text, text_color=conf_session_active ? COLOR_BULL : COLOR_NEUTRAL, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 2, row, "",         text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+        row += 1
+
+    // Direction row (always visible)
+    table.cell(conf_tbl, 0, row, "Direction",    text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 1, row, conf_dir_text,  text_color=conf_dir_color, text_size=size.normal, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    row += 1
+
+    // Confluence score row (always visible)
+    table.cell(conf_tbl, 0, row, "Confluence",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 1, row, str.tostring(conf_score) + "/9", text_color=conf_dir_color, text_size=size.normal, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+
+// --- Confluence Alert ---
+conf_score_meets = conf_score >= conf_alert_threshold
+alertcondition(conf_score_meets and not conf_score_meets[1], "Confluence Ready", "Nexus confluence score reached threshold")
 
 // ============================================================================
 //                              ALERTS
