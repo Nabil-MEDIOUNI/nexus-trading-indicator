@@ -210,3 +210,22 @@ def smc_swing_zones(df: pd.DataFrame, swing_len: int) -> tuple[pd.Series, pd.Ser
         trail_btm[i] = current_btm
 
     return pd.Series(trail_top, index=df.index), pd.Series(trail_btm, index=df.index)
+
+
+def compute_ema_alignment(df: pd.DataFrame, fast: int = 50, mid: int = 100, slow: int = 200) -> pd.Series:
+    """
+    EMA alignment: 1 (bullish) when fast > mid AND fast > slow,
+    -1 (bearish) when fast < mid AND fast < slow, 0 (neutral) otherwise.
+    Mirrors Pine bias_ema() function.
+    """
+    ema_fast = df["close"].ewm(span=fast, adjust=False).mean()
+    ema_mid = df["close"].ewm(span=mid, adjust=False).mean()
+    ema_slow = df["close"].ewm(span=slow, adjust=False).mean()
+
+    bullish = (ema_fast > ema_mid) & (ema_fast > ema_slow)
+    bearish = (ema_fast < ema_mid) & (ema_fast < ema_slow)
+
+    result = pd.Series(0, index=df.index, dtype=np.int8)
+    result[bullish] = 1
+    result[bearish] = -1
+    return result

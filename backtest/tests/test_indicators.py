@@ -3,6 +3,7 @@
 import os
 import sys
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from engine.indicators import (
     atr,
     choch_bos,
+    compute_ema_alignment,
     detect_fvg,
     detect_pivots,
     liquidity_swings,
@@ -126,3 +128,49 @@ class TestSmcSwingZones:
         top, btm = smc_swing_zones(sample_ohlcv, 20)
         valid = top.notna() & btm.notna()
         assert (top[valid] >= btm[valid]).all()
+
+
+class TestEmaAlignment:
+    def test_returns_series(self, sample_ohlcv):
+        result = compute_ema_alignment(sample_ohlcv)
+        assert isinstance(result, pd.Series)
+        assert len(result) == len(sample_ohlcv)
+
+    def test_values_are_valid(self, sample_ohlcv):
+        result = compute_ema_alignment(sample_ohlcv)
+        unique = set(result.dropna().unique())
+        assert unique.issubset({-1, 0, 1})
+
+    def test_bullish_when_ema50_above(self):
+        n = 300
+        dates = pd.date_range("2025-01-01", periods=n, freq="h")
+        prices = np.linspace(100, 200, n)
+        df = pd.DataFrame(
+            {
+                "open": prices,
+                "high": prices + 1,
+                "low": prices - 1,
+                "close": prices,
+                "volume": np.ones(n) * 1000,
+            },
+            index=dates,
+        )
+        result = compute_ema_alignment(df)
+        assert result.iloc[-1] == 1
+
+    def test_bearish_when_ema50_below(self):
+        n = 300
+        dates = pd.date_range("2025-01-01", periods=n, freq="h")
+        prices = np.linspace(200, 100, n)
+        df = pd.DataFrame(
+            {
+                "open": prices,
+                "high": prices + 1,
+                "low": prices - 1,
+                "close": prices,
+                "volume": np.ones(n) * 1000,
+            },
+            index=dates,
+        )
+        result = compute_ema_alignment(df)
+        assert result.iloc[-1] == -1
