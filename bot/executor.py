@@ -7,7 +7,6 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-import ccxt
 from config import Config
 
 logger = logging.getLogger("nexus.executor")
@@ -36,6 +35,8 @@ class Executor:
     @property
     def exchange(self):
         if self._exchange is None and not self.paper:
+            import ccxt
+
             self._exchange = ccxt.kraken(
                 {
                     "apiKey": self.config.KRAKEN_API_KEY,
