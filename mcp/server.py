@@ -42,11 +42,10 @@ def get_strategy_config() -> str:
     """Current default strategy configuration."""
     return (
         "Strategy defaults:\n"
-        "  min_score: 4 (minimum confluence score to trade, range 1-6)\n"
+        "  min_score: 6 (minimum confluence score to trade, range 1-9)\n"
         "  rr_ratio: 3.0 (risk:reward ratio for TP calculation)\n"
         "  max_daily_losses: 3\n"
-        "  sweep_expiry: 20 bars\n"
-        "  bos_expiry: 15 bars\n"
+        "  scoring: 9 factors (CHoCH + EMA on W/D/4H/1H + Session)\n"
         "  sl_buffer: 0.5 ATR\n"
     )
 
@@ -194,7 +193,7 @@ def nexus_get_trade_setup(
     symbol: str = "BTC/USDT",
     timeframe: str = "1h",
     exchange: str = "kraken",
-    min_score: int = 4,
+    min_score: int = 6,
     rr_ratio: float = 3.0,
 ) -> dict:
     """
@@ -206,21 +205,28 @@ def nexus_get_trade_setup(
         symbol: Trading pair in CCXT format (e.g. BTC/USDT)
         timeframe: Chart timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
         exchange: Any CCXT-supported exchange
-        min_score: Minimum confluence score to qualify a setup (1-6, default 4)
+        min_score: Minimum confluence score to qualify a setup (1-9, default 6)
         rr_ratio: Risk:Reward ratio for take profit calculation (default 3.0)
     """
     err = _validate_params(symbol, timeframe)
     if err:
         return {"error": err}
 
-    min_score = max(1, min(min_score, 6))
+    min_score = max(1, min(min_score, 9))
     rr_ratio = max(0.5, min(rr_ratio, 10.0))
 
     _setup_paths()
     try:
         import numpy as np
         from engine.data import fetch_ohlcv, timeframe_to_minutes
-        from engine.indicators import atr, choch_bos, detect_fvg, liquidity_swings, smc_swing_zones, swing_length_for_tf
+        from engine.indicators import (
+            atr,
+            choch_bos,
+            compute_ema_alignment,
+            liquidity_swings,
+            smc_swing_zones,
+            swing_length_for_tf,
+        )
         from engine.strategy import StrategyConfig, compute_confluence
 
         df = fetch_ohlcv(symbol, timeframe, exchange, limit=500)
@@ -232,41 +238,42 @@ def nexus_get_trade_setup(
         config = StrategyConfig(min_score=min_score, rr_ratio=rr_ratio, tf_minutes=tf_min)
 
         choch = choch_bos(df, pivot_length=1)
-        fvg_up, fvg_dn = detect_fvg(df)
+        ema_align = compute_ema_alignment(df)
         liq_ph_top, liq_pl_btm, sweep_h, sweep_l = liquidity_swings(df, 14)
         trail_top, trail_btm = smc_swing_zones(df, swing_len)
         entry_atr = atr(df, config.atr_period)
 
-        score_long, score_short = compute_confluence(
+        score, direction, _ = compute_confluence(
             df,
             config,
-            choch,
-            sweep_h,
-            sweep_l,
-            choch,
-            fvg_up,
-            fvg_dn,
-            trail_top,
-            trail_btm,
+            choch_w=choch,
+            choch_d=choch,
+            choch_4h=choch,
+            choch_1h=choch,
+            ema_w=ema_align,
+            ema_d=ema_align,
+            ema_4h=ema_align,
+            ema_1h=ema_align,
         )
 
         last = len(df) - 1
         price = df["close"].iloc[last]
         atr_val = entry_atr.iloc[last] if not np.isnan(entry_atr.iloc[last]) else 0
 
-        long_score = int(score_long.iloc[last])
-        short_score = int(score_short.iloc[last])
+        current_score = int(score.iloc[last])
+        current_dir = int(direction.iloc[last])
 
         setup = {
             "symbol": symbol,
             "timeframe": timeframe,
             "price": round(float(price), 2),
-            "long": {"score": long_score, "qualified": long_score >= min_score},
-            "short": {"score": short_score, "qualified": short_score >= min_score},
+            "score": current_score,
+            "direction": "long" if current_dir == 1 else "short" if current_dir == -1 else "neutral",
+            "qualified": current_score >= min_score,
             "recommendation": "no setup",
         }
 
-        if long_score >= min_score and (short_score < min_score or long_score > short_score):
+        if current_score >= min_score and current_dir == 1:
             sl_level = (
                 float(liq_pl_btm.iloc[last]) if not np.isnan(liq_pl_btm.iloc[last]) else float(trail_btm.iloc[last])
             )
@@ -285,7 +292,7 @@ def nexus_get_trade_setup(
                     }
                 )
 
-        elif short_score >= min_score:
+        elif current_score >= min_score and current_dir == -1:
             sl_level = (
                 float(liq_ph_top.iloc[last]) if not np.isnan(liq_ph_top.iloc[last]) else float(trail_top.iloc[last])
             )
@@ -324,7 +331,7 @@ def nexus_run_backtest(
     timeframe: str = "1h",
     exchange: str = "kraken",
     bars: int = 2000,
-    min_score: int = 4,
+    min_score: int = 6,
     rr_ratio: float = 3.0,
     max_daily_losses: int = 3,
 ) -> dict:
@@ -338,7 +345,7 @@ def nexus_run_backtest(
         timeframe: Chart timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
         exchange: Any CCXT-supported exchange
         bars: Number of historical bars to test (50-5000, more = slower but more reliable)
-        min_score: Minimum confluence score to enter trades (1-6, default 4)
+        min_score: Minimum confluence score to enter trades (1-9, default 6)
         rr_ratio: Risk:Reward ratio (default 3.0 = 3R take profit)
         max_daily_losses: Stop trading after N losses per day (1-10, default 3)
     """
@@ -347,7 +354,7 @@ def nexus_run_backtest(
         return {"error": err}
 
     bars = max(50, min(bars, 5000))
-    min_score = max(1, min(min_score, 6))
+    min_score = max(1, min(min_score, 9))
     rr_ratio = max(0.5, min(rr_ratio, 10.0))
     max_daily_losses = max(1, min(max_daily_losses, 10))
 

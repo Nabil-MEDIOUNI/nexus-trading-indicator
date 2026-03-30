@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "backtest"))
 
-from engine.indicators import choch_bos, detect_fvg, liquidity_swings, smc_swing_zones
+from engine.indicators import choch_bos, compute_ema_alignment, detect_fvg, liquidity_swings, smc_swing_zones
 from engine.metrics import calculate_metrics
 from engine.strategy import StrategyConfig, compute_confluence, run_backtest
 
@@ -75,13 +75,22 @@ class TestSetupTool:
     def test_confluence_scores_valid_range(self, market_data):
         config = StrategyConfig(tf_minutes=60)
         choch = choch_bos(market_data, 1)
-        fvg_up, fvg_dn = detect_fvg(market_data)
-        _, _, sh, sl = liquidity_swings(market_data, 14)
-        top, btm = smc_swing_zones(market_data, 20)
+        ema_align = compute_ema_alignment(market_data)
 
-        score_l, score_s = compute_confluence(market_data, config, choch, sh, sl, choch, fvg_up, fvg_dn, top, btm)
-        assert (score_l >= 0).all() and (score_l <= 6).all()
-        assert (score_s >= 0).all() and (score_s <= 6).all()
+        score, direction, _ = compute_confluence(
+            market_data,
+            config,
+            choch_w=choch,
+            choch_d=choch,
+            choch_4h=choch,
+            choch_1h=choch,
+            ema_w=ema_align,
+            ema_d=ema_align,
+            ema_4h=ema_align,
+            ema_1h=ema_align,
+        )
+        assert (score >= 0).all() and (score <= 9).all()
+        assert set(direction.unique()).issubset({-1, 0, 1})
 
     def test_sl_tp_valid_for_long(self, market_data):
         trades = run_backtest(market_data, StrategyConfig(min_score=2))
