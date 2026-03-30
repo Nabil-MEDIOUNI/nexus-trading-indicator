@@ -1,0 +1,405 @@
+// ============================================================================
+// NEXUS TRADING STRATEGY - Backtesting Engine
+// ============================================================================
+// Version: 1.0.0
+// Purpose: TradingView strategy backtester for the 5-step execution model
+// Pairs with: nexus-indicator.pine (visual analysis)
+//
+// This file ports the detection logic from the indicator into a strategy()
+// context with strategy.entry() / strategy.exit() for backtesting.
+// It does NOT include visual modules (EMA, sessions, candle patterns, etc.)
+// ============================================================================
+
+//@version=6
+strategy("Nexus Strategy", shorttitle="NEXUS-BT", overlay=true,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=1,
+     initial_capital=10000, commission_type=strategy.commission.percent,
+     commission_value=0.1, slippage=2, pyramiding=0,
+     max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// ============================================================================
+//                           CONSTANTS
+// ============================================================================
+
+BULLISH = 1
+BEARISH = -1
+COLOR_BULL = #22ab94
+COLOR_BEAR = #f7525f
+
+// ============================================================================
+//                           SETTINGS
+// ============================================================================
+
+// --- Strategy ---
+strat_rr_ratio      = input.float(3.0, "Risk:Reward Ratio", minval=1.0, maxval=10.0, step=0.5, group="Strategy")
+strat_sl_buffer     = input.float(0.5, "SL Buffer (ATR mult)", minval=0.1, maxval=2.0, step=0.1, group="Strategy")
+strat_max_daily     = input.int(3, "Max Losses Per Day", minval=1, maxval=10, group="Strategy")
+strat_atr_period    = input.int(20, "ATR Period", minval=5, maxval=50, group="Strategy")
+
+// --- Confluence ---
+conf_min_score      = input.int(4, "Min Confluence Score", minval=1, maxval=6, group="Confluence")
+conf_sweep_expiry   = input.int(20, "Sweep Expiry (bars)", minval=5, maxval=100, group="Confluence")
+conf_bos_expiry     = input.int(15, "BOS Expiry (bars)", minval=5, maxval=100, group="Confluence")
+
+// --- SMC ---
+smc_swing_len = switch
+    timeframe.isseconds => 50
+    timeframe.isminutes and timeframe.multiplier <= 5 => 20
+    timeframe.isminutes and timeframe.multiplier <= 15 => 25
+    timeframe.isminutes and timeframe.multiplier <= 30 => 30
+    timeframe.isminutes and timeframe.multiplier <= 60 => 35
+    timeframe.isminutes and timeframe.multiplier <= 240 => 40
+    timeframe.isdaily => 20
+    timeframe.isweekly => 12
+    timeframe.ismonthly => 6
+    => 30
+
+// --- FVG ---
+FVG_BODY_THRESHOLD = 0.36
+FVG_BREAK_LOOKBACK = 10
+LIQ_SWING_LENGTH   = 14
+
+// ============================================================================
+//                    SMC SWING STRUCTURE (for zones + trend)
+// ============================================================================
+
+type smc_pivot
+    float currentLevel
+    float lastLevel
+    bool crossed
+    int barTime = na
+    int barIndex = na
+
+type smc_trailing
+    float top
+    float bottom
+    int barTime
+    int barIndex
+
+var smc_pivot smc_swingHigh = smc_pivot.new(na, na, false)
+var smc_pivot smc_swingLow  = smc_pivot.new(na, na, false)
+var smc_trailing smc_trail  = smc_trailing.new()
+var int smc_bias = 0
+
+smc_leg(int size) =>
+    var leg = 0
+    if high[size] > ta.highest(size)
+        leg := 0
+    else if low[size] < ta.lowest(size)
+        leg := 1
+    leg
+
+smc_getCurrentStructure(int size) =>
+    currentLeg = smc_leg(size)
+    if ta.change(currentLeg) != 0
+        if ta.change(currentLeg) == 1
+            smc_swingLow.lastLevel := smc_swingLow.currentLevel
+            smc_swingLow.currentLevel := low[size]
+            smc_swingLow.crossed := false
+            smc_swingLow.barTime := time[size]
+            smc_swingLow.barIndex := bar_index[size]
+            smc_trail.bottom := low[size]
+            smc_trail.barTime := time[size]
+            smc_trail.barIndex := bar_index[size]
+        else
+            smc_swingHigh.lastLevel := smc_swingHigh.currentLevel
+            smc_swingHigh.currentLevel := high[size]
+            smc_swingHigh.crossed := false
+            smc_swingHigh.barTime := time[size]
+            smc_swingHigh.barIndex := bar_index[size]
+            smc_trail.top := high[size]
+            smc_trail.barTime := time[size]
+            smc_trail.barIndex := bar_index[size]
+
+smc_getCurrentStructure(smc_swing_len)
+
+// Trailing extremes
+smc_trail.top := math.max(high, smc_trail.top)
+smc_trail.bottom := math.min(low, smc_trail.bottom)
+
+// Swing trend detection
+if ta.crossover(close, smc_swingHigh.currentLevel) and not smc_swingHigh.crossed
+    smc_swingHigh.crossed := true
+    smc_bias := BULLISH
+
+if ta.crossunder(close, smc_swingLow.currentLevel) and not smc_swingLow.crossed
+    smc_swingLow.crossed := true
+    smc_bias := BEARISH
+
+// ============================================================================
+//                         ChoCH / BOS
+// ============================================================================
+
+cb_ph = ta.pivothigh(high, 1, 1)
+cb_pl = ta.pivotlow(low, 1, 1)
+
+var float cb_upper_val = na
+var bool  cb_upper_crossed = false
+var float cb_lower_val = na
+var bool  cb_lower_crossed = false
+var int   cb_os = 0
+
+if not na(cb_ph)
+    cb_upper_val := high[1]
+    cb_upper_crossed := false
+
+if not na(cb_pl)
+    cb_lower_val := low[1]
+    cb_lower_crossed := false
+
+if ta.crossover(close, cb_upper_val) and not cb_upper_crossed
+    cb_upper_crossed := true
+    cb_os := 1
+
+if ta.crossunder(close, cb_lower_val) and not cb_lower_crossed
+    cb_lower_crossed := true
+    cb_os := -1
+
+alert_choch_bull = cb_os == 1 and cb_os[1] != 1
+alert_choch_bear = cb_os == -1 and cb_os[1] != -1
+
+// ============================================================================
+//                         FAIR VALUE GAPS
+// ============================================================================
+
+type strat_FVG
+    float top
+    float bottom
+    bool active
+
+var strat_FVG[] fvg_up = array.new<strat_FVG>()
+var strat_FVG[] fvg_dn = array.new<strat_FVG>()
+
+ict_body = math.abs(close - open)
+ict_mx   = math.max(close, open)
+ict_mn   = math.min(close, open)
+ict_meanBody = ta.sma(ict_body, 2)
+ict_L_body   = high - ict_mx < ict_body * FVG_BODY_THRESHOLD and ict_mn - low < ict_body * FVG_BODY_THRESHOLD
+ict_L_bodyUP = ict_body > ict_meanBody and ict_L_body and close > open
+ict_L_bodyDN = ict_body > ict_meanBody and ict_L_body and close < open
+
+ict_imbalanceUP = ict_L_bodyUP[1] and low > high[2]
+ict_imbalanceDN = ict_L_bodyDN[1] and high < low[2]
+
+if ict_imbalanceUP
+    fvg_up.unshift(strat_FVG.new(low, high[2], true))
+    if fvg_up.size() > 20
+        fvg_up.pop()
+
+if ict_imbalanceDN
+    fvg_dn.unshift(strat_FVG.new(low[2], high, true))
+    if fvg_dn.size() > 20
+        fvg_dn.pop()
+
+// FVG break detection + shared state
+fvg_has_active_bull = false
+fvg_has_active_bear = false
+fvg_bull_top = float(na)
+fvg_bull_btm = float(na)
+fvg_bear_top = float(na)
+fvg_bear_btm = float(na)
+
+for i = 0 to math.min(FVG_BREAK_LOOKBACK, fvg_up.size() - 1)
+    f = fvg_up.get(i)
+    if f.active
+        if low < f.bottom
+            f.active := false
+        else
+            if not fvg_has_active_bull
+                fvg_has_active_bull := true
+                fvg_bull_top := f.top
+                fvg_bull_btm := f.bottom
+
+for i = 0 to math.min(FVG_BREAK_LOOKBACK, fvg_dn.size() - 1)
+    f = fvg_dn.get(i)
+    if f.active
+        if high > f.top
+            f.active := false
+        else
+            if not fvg_has_active_bear
+                fvg_has_active_bear := true
+                fvg_bear_top := f.top
+                fvg_bear_btm := f.bottom
+
+// ============================================================================
+//                       LIQUIDITY SWINGS
+// ============================================================================
+
+liq_ph = ta.pivothigh(LIQ_SWING_LENGTH, LIQ_SWING_LENGTH)
+liq_pl = ta.pivotlow(LIQ_SWING_LENGTH, LIQ_SWING_LENGTH)
+
+var float liq_ph_top = na
+var float liq_pl_btm = na
+var bool  liq_ph_crossed = false
+var bool  liq_pl_crossed = false
+
+if not na(liq_ph)
+    liq_ph_top := high[LIQ_SWING_LENGTH]
+    liq_ph_crossed := false
+else
+    liq_ph_crossed := close > liq_ph_top ? true : liq_ph_crossed
+
+if not na(liq_pl)
+    liq_pl_btm := low[LIQ_SWING_LENGTH]
+    liq_pl_crossed := false
+else
+    liq_pl_crossed := close < liq_pl_btm ? true : liq_pl_crossed
+
+alert_sweep_high = liq_ph_crossed and not liq_ph_crossed[1]
+alert_sweep_low  = liq_pl_crossed and not liq_pl_crossed[1]
+
+// ============================================================================
+//                      MTF BIAS (CHoCH on higher TFs)
+// ============================================================================
+
+bias_choch() =>
+    var int os = 0
+    ph = ta.pivothigh(high, 1, 1)
+    pl = ta.pivotlow(low, 1, 1)
+    var float upper_val = na
+    var bool  upper_crossed = false
+    var float lower_val = na
+    var bool  lower_crossed = false
+    if not na(ph)
+        upper_val := high[1]
+        upper_crossed := false
+    if not na(pl)
+        lower_val := low[1]
+        lower_crossed := false
+    if ta.crossover(close, upper_val) and not upper_crossed
+        os := 1
+        upper_crossed := true
+    if ta.crossunder(close, lower_val) and not lower_crossed
+        os := -1
+        lower_crossed := true
+    os
+
+bias_1h = request.security(syminfo.tickerid, "60",  bias_choch())
+bias_4h = request.security(syminfo.tickerid, "240", bias_choch())
+bias_d  = request.security(syminfo.tickerid, "D",   bias_choch())
+bias_w  = request.security(syminfo.tickerid, "W",   bias_choch())
+
+// ============================================================================
+//                       CONFLUENCE SCORER
+// ============================================================================
+
+var int conf_sweep_high_bar = na
+var int conf_sweep_low_bar  = na
+var int conf_bos_bull_bar   = na
+var int conf_bos_bear_bar   = na
+
+if alert_sweep_high
+    conf_sweep_high_bar := bar_index
+if alert_sweep_low
+    conf_sweep_low_bar := bar_index
+if alert_choch_bull
+    conf_bos_bull_bar := bar_index
+if alert_choch_bear
+    conf_bos_bear_bar := bar_index
+
+// Factor 1: Bias
+conf_bias_bull = false
+conf_bias_bear = false
+if timeframe.in_seconds() <= timeframe.in_seconds("15")
+    conf_bias_bull := (bias_1h == 1 ? 1 : 0) + (bias_4h == 1 ? 1 : 0) + (bias_d == 1 ? 1 : 0) >= 2
+    conf_bias_bear := (bias_1h == -1 ? 1 : 0) + (bias_4h == -1 ? 1 : 0) + (bias_d == -1 ? 1 : 0) >= 2
+else if timeframe.in_seconds() <= timeframe.in_seconds("60")
+    conf_bias_bull := (bias_4h == 1 ? 1 : 0) + (bias_d == 1 ? 1 : 0) + (bias_w == 1 ? 1 : 0) >= 2
+    conf_bias_bear := (bias_4h == -1 ? 1 : 0) + (bias_d == -1 ? 1 : 0) + (bias_w == -1 ? 1 : 0) >= 2
+else if timeframe.in_seconds() <= timeframe.in_seconds("240")
+    conf_bias_bull := bias_d == 1 and bias_w == 1
+    conf_bias_bear := bias_d == -1 and bias_w == -1
+else
+    conf_bias_bull := bias_w == 1
+    conf_bias_bear := bias_w == -1
+
+// Factor 2: Zone
+conf_eq = math.avg(smc_trail.top, smc_trail.bottom)
+conf_in_discount = not na(smc_trail.top) and not na(smc_trail.bottom) and close < conf_eq
+conf_in_premium  = not na(smc_trail.top) and not na(smc_trail.bottom) and close > conf_eq
+
+// Factor 3: Sweep (with expiry)
+conf_swept_high = not na(conf_sweep_high_bar) and (bar_index - conf_sweep_high_bar) <= conf_sweep_expiry
+conf_swept_low  = not na(conf_sweep_low_bar) and (bar_index - conf_sweep_low_bar) <= conf_sweep_expiry
+
+// Factor 4: FVG
+conf_fvg_bull = fvg_has_active_bull
+conf_fvg_bear = fvg_has_active_bear
+
+// Factor 5: BOS (with expiry)
+conf_bos_bull = not na(conf_bos_bull_bar) and (bar_index - conf_bos_bull_bar) <= conf_bos_expiry
+conf_bos_bear = not na(conf_bos_bear_bar) and (bar_index - conf_bos_bear_bar) <= conf_bos_expiry
+
+// Factor 6: Session
+conf_ses = timeframe.isintraday ? ((nz(time(timeframe.period, "1300-2200", syminfo.timezone)) > 0 or nz(time(timeframe.period, "0700-1600", syminfo.timezone)) > 0) ? 1 : 0) : 1
+
+// Scores
+conf_score_long  = (conf_bias_bull ? 1 : 0) + (conf_in_discount ? 1 : 0) + (conf_swept_low ? 1 : 0) + (conf_fvg_bull ? 1 : 0) + (conf_bos_bull ? 1 : 0) + conf_ses
+conf_score_short = (conf_bias_bear ? 1 : 0) + (conf_in_premium ? 1 : 0) + (conf_swept_high ? 1 : 0) + (conf_fvg_bear ? 1 : 0) + (conf_bos_bear ? 1 : 0) + conf_ses
+
+// ============================================================================
+//                       ENTRY / EXIT LOGIC
+// ============================================================================
+
+entry_atr = ta.atr(strat_atr_period)
+
+// Pullback detection
+pb_long_fvg  = fvg_has_active_bull and low <= fvg_bull_top and close > fvg_bull_btm
+pb_short_fvg = fvg_has_active_bear and high >= fvg_bear_btm and close < fvg_bear_top
+pb_long_eq   = close <= conf_eq and close[1] > conf_eq
+pb_short_eq  = close >= conf_eq and close[1] < conf_eq
+
+entry_long  = conf_score_long >= conf_min_score and (pb_long_fvg or pb_long_eq)
+entry_short = conf_score_short >= conf_min_score and (pb_short_fvg or pb_short_eq)
+
+// SL/TP calculation
+long_sl  = (not na(liq_pl_btm) ? liq_pl_btm : smc_trail.bottom) - entry_atr * strat_sl_buffer
+long_tp  = close + (close - long_sl) * strat_rr_ratio
+short_sl = (not na(liq_ph_top) ? liq_ph_top : smc_trail.top) + entry_atr * strat_sl_buffer
+short_tp = close - (short_sl - close) * strat_rr_ratio
+
+// Daily loss tracking
+var int daily_losses = 0
+var int last_trade_day = 0
+
+current_day = dayofmonth
+if current_day != last_trade_day
+    daily_losses := 0
+    last_trade_day := current_day
+
+// Track losses
+if strategy.closedtrades > 0
+    last_pnl = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    if last_pnl < 0 and strategy.closedtrades != strategy.closedtrades[1]
+        daily_losses += 1
+
+daily_ok = daily_losses < strat_max_daily
+
+// ============================================================================
+//                       STRATEGY EXECUTION
+// ============================================================================
+
+// Only enter when not already in a position and daily limit not hit
+can_trade = strategy.position_size == 0 and daily_ok
+
+if entry_long and not entry_long[1] and can_trade and (close - long_sl) > 0
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=long_sl, limit=long_tp)
+
+if entry_short and not entry_short[1] and can_trade and (short_sl - close) > 0
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=short_sl, limit=short_tp)
+
+// ============================================================================
+//                           PLOTS
+// ============================================================================
+
+plot(conf_eq, "Equilibrium", color=color.new(color.gray, 70), display=display.all - display.status_line)
+
+plotshape(entry_long and not entry_long[1] and can_trade, "Long Signal",
+     shape.triangleup, location.belowbar, COLOR_BULL,
+     size=size.small, display=display.all - display.status_line)
+
+plotshape(entry_short and not entry_short[1] and can_trade, "Short Signal",
+     shape.triangledown, location.abovebar, COLOR_BEAR,
+     size=size.small, display=display.all - display.status_line)

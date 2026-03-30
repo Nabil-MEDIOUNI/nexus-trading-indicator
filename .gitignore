@@ -1,0 +1,16 @@
+# Runtime / generated
+logs/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+.ruff_cache/
+node_modules/
+dist/
+build/
+package-lock.json
+
+# Data / output
+backtest/data/
+backtest/results/
+bot/journal/

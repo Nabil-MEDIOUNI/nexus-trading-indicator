@@ -1,0 +1,1517 @@
+// ============================================================================
+// NEXUS TRADING INDICATOR - Unified SMC Trading System
+// ============================================================================
+// Version: 1.0.0
+// Modules: Market Structure, Triple EMA, Sessions, SMC Features, ChoCH/BOS,
+//          FVG, Liquidity Swings, Candlestick Patterns, MTF Bias Table, Alerts
+// ============================================================================
+
+//@version=6
+indicator("Nexus Trading Indicator", shorttitle="NEXUS", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// ============================================================================
+//                          MODULE TOGGLES
+// ============================================================================
+
+show_market_structure = input.bool(true, "Market Structure (HH/HL/LH/LL)", group="Module Toggles")
+show_ema              = input.bool(false, "Triple EMA (50/100/200)", group="Module Toggles")
+show_sessions         = input.bool(true, "Trading Sessions", group="Module Toggles")
+show_smc              = input.bool(true, "SMC Features", group="Module Toggles")
+show_choch_bos        = input.bool(false, "ChoCH / BOS", group="Module Toggles")
+show_fvg              = input.bool(true, "Fair Value Gaps (FVG)", group="Module Toggles")
+show_liq              = input.bool(true, "Liquidity Swings", group="Module Toggles")
+show_candle_patterns  = input.bool(true, "Candlestick Patterns", group="Module Toggles")
+show_bias_table       = input.bool(true, "MTF Bias Table", group="Module Toggles")
+show_confluence       = input.bool(true, "Confluence Scorer", group="Module Toggles")
+
+// ============================================================================
+//                        SHARED CONSTANTS
+// ============================================================================
+
+BULLISH = 1
+BEARISH = -1
+
+// --- Colors ---
+COLOR_BULL        = #22ab94
+COLOR_BEAR        = #f7525f
+COLOR_NEUTRAL     = #878b94
+COLOR_TRANSPARENT = color.new(color.white, 100)
+COLOR_TABLE_BG    = #2d2d2d
+
+// --- Magic Numbers ---
+ATR_PERIOD_SWING   = 200   // SMC swing measurement
+ATR_PERIOD_PATTERN = 20    // Candlestick pattern threshold
+ATR_PERIOD_SESSION = 14    // Session overlap detection
+LIQ_SWING_LENGTH   = 14    // Liquidity pivot detection
+FVG_BODY_THRESHOLD = 0.36  // Min body ratio for FVG candle
+FVG_BREAK_LOOKBACK = 10    // Max FVG boxes to check for breaks
+FVG_EXTENSION_BARS = 8     // Bars to extend FVG boxes forward
+FVG_PRESENT_LIMIT  = 500   // Bar lookback for present mode
+SES_LINE_EXTENSION = 30    // Bars to extend session H/L lines
+SES_OVERLAP_MULT   = 0.3   // ATR multiplier for overlap detection
+MTF_TIME_EXTENSION = 20    // Multiplier for MTF level line extension
+SMC_MAX_ARRAY_SIZE = 10000 // Max bars stored for MTF level calculations
+
+// ============================================================================
+//                      SHARED UTILITY FUNCTIONS
+// ============================================================================
+
+f_getLabelSize(string sz) =>
+    switch sz
+        "Tiny"   => size.tiny
+        "Small"  => size.small
+        "Normal" => size.normal
+        "Large"  => size.large
+        => size.small
+
+f_getLineStyle(string style) =>
+    switch style
+        "Solid"  => line.style_solid
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+
+// ============================================================================
+//                     MODULE: MARKET STRUCTURE
+// ============================================================================
+
+// --- Settings ---
+
+ms_zigzag_len  = input.int(10, "Zigzag Length", minval=1, maxval=50, group="Market Structure")
+ms_source      = input.string("Wick", "Source", options=["Wick", "Body"], group="Market Structure")
+ms_lineColor  = input.color(#000000, "Line Color", inline="ms_col", group="Market Structure")
+ms_lineWidth  = input.int(2, "Line Width", minval=1, maxval=5, inline="ms_line", group="Market Structure")
+ms_labelSize  = input.string("Small", "Label Size", options=["Tiny", "Small", "Normal", "Large"], inline="ms_line", group="Market Structure")
+
+// --- Constants ---
+
+MS_SIZE = f_getLabelSize(ms_labelSize)
+
+// --- Variables ---
+
+var float[] ms_high_points_arr = array.new_float(5)
+var int[]   ms_high_index_arr  = array.new_int(5)
+var float[] ms_low_points_arr  = array.new_float(5)
+var int[]   ms_low_index_arr   = array.new_int(5)
+
+var float  ms_hiPivot  = na
+var float  ms_loPivot  = na
+var int    ms_hiBar    = na
+var int    ms_loBar    = na
+var float  ms_hiRef    = na
+var float  ms_loRef    = na
+var line   ms_liveLn   = na
+var label  ms_liveLb   = na
+
+// --- Functions ---
+
+f_ms_get_high(ind) =>
+    [array.get(ms_high_points_arr, array.size(ms_high_points_arr) - 1 - ind), array.get(ms_high_index_arr, array.size(ms_high_index_arr) - 1 - ind)]
+
+f_ms_get_low(ind) =>
+    [array.get(ms_low_points_arr, array.size(ms_low_points_arr) - 1 - ind), array.get(ms_low_index_arr, array.size(ms_low_index_arr) - 1 - ind)]
+
+f_getHiLabel(price) =>
+    result = ""
+    if na(ms_hiPivot)
+        result := "High"
+    else if price <= ms_hiPivot
+        result := "LH"
+    else
+        if na(ms_hiRef)
+            result := "High"
+        else if price > ms_hiRef
+            result := "HH"
+        else
+            result := "High"
+    result
+
+f_getLoLabel(price) =>
+    result = ""
+    if na(ms_loPivot)
+        result := "Low"
+    else if price >= ms_loPivot
+        result := "HL"
+    else
+        if na(ms_loRef)
+            result := "Low"
+        else if price < ms_loRef
+            result := "LL"
+        else
+            result := "Low"
+    result
+
+// --- Execution ---
+
+ms_hi = ms_source == "Wick" ? high : math.max(open, close)
+ms_lo = ms_source == "Wick" ? low  : math.min(open, close)
+ms_to_up   = ms_hi >= ta.highest(ms_hi, ms_zigzag_len)
+ms_to_down = ms_lo <= ta.lowest(ms_lo, ms_zigzag_len)
+
+ms_trend = 1
+ms_trend := nz(ms_trend[1], 1)
+ms_trend := ms_trend == 1 and ms_to_down ? -1 : ms_trend == -1 and ms_to_up ? 1 : ms_trend
+
+ms_last_trend_up_since   = ta.barssince(ms_to_up[1])
+ms_low_val  = ta.lowest(ms_lo, nz(ms_last_trend_up_since > 0 ? ms_last_trend_up_since : 1, 1))
+ms_low_idx  = bar_index - ta.barssince(ms_low_val == ms_lo)
+
+ms_last_trend_down_since = ta.barssince(ms_to_down[1])
+ms_high_val = ta.highest(ms_hi, nz(ms_last_trend_down_since > 0 ? ms_last_trend_down_since : 1, 1))
+ms_high_idx = bar_index - ta.barssince(ms_high_val == ms_hi)
+
+if ta.change(ms_trend) != 0 and show_market_structure
+    if ms_trend == 1
+        array.push(ms_low_points_arr, ms_low_val)
+        array.push(ms_low_index_arr, ms_low_idx)
+    if ms_trend == -1
+        array.push(ms_high_points_arr, ms_high_val)
+        array.push(ms_high_index_arr, ms_high_idx)
+
+[ms_h0, ms_h0i] = f_ms_get_high(0)
+[ms_l0, ms_l0i] = f_ms_get_low(0)
+
+if ta.change(ms_trend) != 0 and show_market_structure
+    if ms_trend == -1
+        // High pivot confirmed
+        lbl = f_getHiLabel(ms_h0)
+
+        if lbl == "High"
+            ms_hiRef := ms_h0
+            ms_loRef := na
+        else if lbl == "HH"
+            ms_hiRef := ms_h0
+
+        if not na(ms_loBar)
+            line.new(ms_loBar, ms_loPivot, ms_h0i, ms_h0, color=ms_lineColor, width=ms_lineWidth)
+            label.new(ms_h0i, ms_h0, lbl, style=label.style_label_down, color=COLOR_TRANSPARENT, textcolor=color.black, size=MS_SIZE)
+
+        ms_hiPivot := ms_h0
+        ms_hiBar   := ms_h0i
+
+    if ms_trend == 1
+        // Low pivot confirmed
+        lbl = f_getLoLabel(ms_l0)
+
+        if lbl == "Low"
+            ms_loRef := ms_l0
+            ms_hiRef := na
+        else if lbl == "LL"
+            ms_loRef := ms_l0
+
+        if not na(ms_hiBar)
+            line.new(ms_hiBar, ms_hiPivot, ms_l0i, ms_l0, color=ms_lineColor, width=ms_lineWidth)
+            label.new(ms_l0i, ms_l0, lbl, style=label.style_label_up, color=COLOR_TRANSPARENT, textcolor=color.black, size=MS_SIZE)
+
+        ms_loPivot := ms_l0
+        ms_loBar   := ms_l0i
+
+// Live leg for market structure
+if barstate.islast and show_market_structure
+    if not na(ms_liveLn)
+        line.delete(ms_liveLn)
+    if not na(ms_liveLb)
+        label.delete(ms_liveLb)
+
+    if ms_trend == -1 and not na(ms_hiBar)
+        // Trending down - show potential low
+        ms_liveLn := line.new(ms_hiBar, ms_hiPivot, ms_low_idx, ms_low_val, color=ms_lineColor, width=ms_lineWidth)
+        lbl = f_getLoLabel(ms_low_val)
+        ms_liveLb := label.new(ms_low_idx, ms_low_val, lbl, style=label.style_label_up, color=COLOR_TRANSPARENT, textcolor=color.black, size=MS_SIZE)
+
+    else if ms_trend == 1 and not na(ms_loBar)
+        // Trending up - show potential high
+        ms_liveLn := line.new(ms_loBar, ms_loPivot, ms_high_idx, ms_high_val, color=ms_lineColor, width=ms_lineWidth)
+        lbl = f_getHiLabel(ms_high_val)
+        ms_liveLb := label.new(ms_high_idx, ms_high_val, lbl, style=label.style_label_down, color=COLOR_TRANSPARENT, textcolor=color.black, size=MS_SIZE)
+
+// ============================================================================
+//                        MODULE: TRIPLE EMA
+// ============================================================================
+
+// --- Settings ---
+
+ema_len1  = input.int(50, "EMA 1 Length", minval=1, group="Triple EMA")
+ema_col1  = input.color(#f7525f, "EMA 1 Color", inline="ema1", group="Triple EMA")
+ema_len2  = input.int(100, "EMA 2 Length", minval=1, group="Triple EMA")
+ema_col2  = input.color(#22ab94, "EMA 2 Color", inline="ema2", group="Triple EMA")
+ema_len3  = input.int(200, "EMA 3 Length", minval=1, group="Triple EMA")
+ema_col3  = input.color(color.rgb(0, 0, 0), "EMA 3 Color", inline="ema3", group="Triple EMA")
+
+// --- Execution ---
+
+ema1 = ta.ema(close, ema_len1)
+ema2 = ta.ema(close, ema_len2)
+ema3 = ta.ema(close, ema_len3)
+
+plot(show_ema ? ema1 : na, title="EMA 1", color=ema_col1, linewidth=1, display=display.all - display.status_line)
+plot(show_ema ? ema2 : na, title="EMA 2", color=ema_col2, linewidth=1, display=display.all - display.status_line)
+plot(show_ema ? ema3 : na, title="EMA 3", color=ema_col3, linewidth=1, display=display.all - display.status_line)
+
+// ============================================================================
+//                        MODULE: SESSIONS
+// ============================================================================
+
+// --- Settings ---
+
+// New York
+ses_show_ny   = input.bool(true, "New York", inline="ses_ny", group="Sessions")
+ses_ny_time   = input.session("1300-2200", "", inline="ses_ny", group="Sessions")
+ses_ny_color  = input.color(#ff5d00, "", inline="ses_ny", group="Sessions")
+
+// London
+ses_show_ldn  = input.bool(true, "London", inline="ses_ldn", group="Sessions")
+ses_ldn_time  = input.session("0700-1600", "", inline="ses_ldn", group="Sessions")
+ses_ldn_color = input.color(#2157f3, "", inline="ses_ldn", group="Sessions")
+
+// Asia
+ses_show_asia = input.bool(true, "Asia", inline="ses_asia", group="Sessions")
+ses_asia_time = input.session("0000-0900", "", inline="ses_asia", group="Sessions")
+ses_asia_color= input.color(#e91e63, "", inline="ses_asia", group="Sessions")
+
+// Dividers always shown
+ses_show_divider = true
+ses_show_hl      = input.bool(false, "Session High/Low Lines", group="Sessions")
+
+// --- Functions ---
+
+ses_draw_hl(bool is_active, bool show, color css, string tag) =>
+    var float ses_h = na
+    var float ses_l = na
+    var line  ses_h_line = na
+    var line  ses_l_line = na
+    var label ses_h_lbl = na
+    var label ses_l_lbl = na
+    if show
+        if is_active and not is_active[1]
+            ses_h := high
+            ses_l := low
+            line.delete(ses_h_line)
+            line.delete(ses_l_line)
+            label.delete(ses_h_lbl)
+            label.delete(ses_l_lbl)
+            ses_h_line := line.new(bar_index, ses_h, bar_index + SES_LINE_EXTENSION, ses_h, color=css, style=line.style_dashed)
+            ses_l_line := line.new(bar_index, ses_l, bar_index + SES_LINE_EXTENSION, ses_l, color=css, style=line.style_dashed)
+            ses_h_lbl := label.new(bar_index + SES_LINE_EXTENSION, ses_h, tag + "H", style=label.style_label_left, color=COLOR_TRANSPARENT, textcolor=css, size=size.tiny)
+            ses_l_lbl := label.new(bar_index + SES_LINE_EXTENSION, ses_l, tag + "L", style=label.style_label_left, color=COLOR_TRANSPARENT, textcolor=css, size=size.tiny)
+        if is_active
+            if high > ses_h
+                ses_h := high
+            if low < ses_l
+                ses_l := low
+            line.set_y1(ses_h_line, ses_h), line.set_y2(ses_h_line, ses_h)
+            line.set_y1(ses_l_line, ses_l), line.set_y2(ses_l_line, ses_l)
+        line.set_x2(ses_h_line, bar_index + SES_LINE_EXTENSION)
+        line.set_x2(ses_l_line, bar_index + SES_LINE_EXTENSION)
+        label.set_x(ses_h_lbl, bar_index + SES_LINE_EXTENSION), label.set_y(ses_h_lbl, ses_h)
+        label.set_x(ses_l_lbl, bar_index + SES_LINE_EXTENSION), label.set_y(ses_l_lbl, ses_l)
+    [ses_h, ses_l, ses_h_line, ses_l_line, ses_h_lbl, ses_l_lbl]
+
+ses_is_close(float a, float b, float thr) =>
+    not na(a) and not na(b) and math.abs(a - b) < thr
+
+// --- Execution ---
+
+ses_tf = timeframe.period
+
+var ses_tz = syminfo.timezone
+
+ses_is_ny   = nz(time(ses_tf, ses_ny_time, ses_tz)) > 0
+ses_is_ldn  = nz(time(ses_tf, ses_ldn_time, ses_tz)) > 0
+ses_is_asia = nz(time(ses_tf, ses_asia_time, ses_tz)) > 0
+
+// Only show dividers on intraday timeframes <= 30min
+ses_show_divider_tf = timeframe.isintraday and timeframe.multiplier <= 30
+
+// New York session dividers
+plotshape(show_sessions and ses_is_ny and ses_show_divider and ses_show_ny and ses_show_divider_tf, "NY"
+  , shape.square
+  , location.bottom
+  , na
+  , text = "."
+  , textcolor = ses_ny_color
+  , size = size.tiny
+  , display = display.all - display.status_line
+  , editable = false)
+
+plotshape(show_sessions and ses_is_ny != ses_is_ny[1] and ses_show_divider and ses_show_ny and ses_show_divider_tf, "NYE"
+  , shape.labelup
+  , location.bottom
+  , na
+  , text = "I"
+  , textcolor = ses_ny_color
+  , size = size.tiny
+  , display = display.all - display.status_line
+  , editable = false)
+
+// London session dividers
+plotshape(show_sessions and ses_is_ldn and ses_show_divider and ses_show_ldn and ses_show_divider_tf, "LDN"
+  , shape.labelup
+  , location.bottom
+  , na
+  , text = "."
+  , textcolor = ses_ldn_color
+  , size = size.tiny
+  , display = display.all - display.status_line
+  , editable = false)
+
+plotshape(show_sessions and ses_is_ldn != ses_is_ldn[1] and ses_show_divider and ses_show_ldn and ses_show_divider_tf, "LDNE"
+  , shape.labelup
+  , location.bottom
+  , na
+  , text = "I"
+  , textcolor = ses_ldn_color
+  , size = size.tiny
+  , display = display.all - display.status_line
+  , editable = false)
+
+// Asia session dividers
+plotshape(show_sessions and ses_is_asia and ses_show_divider and ses_show_asia and ses_show_divider_tf, "ASIA"
+  , shape.square
+  , location.bottom
+  , na
+  , text = "."
+  , textcolor = ses_asia_color
+  , size = size.tiny
+  , display = display.all - display.status_line
+  , editable = false)
+
+plotshape(show_sessions and ses_is_asia != ses_is_asia[1] and ses_show_divider and ses_show_asia and ses_show_divider_tf, "ASIAE"
+  , shape.labelup
+  , location.bottom
+  , na
+  , text = "I"
+  , textcolor = ses_asia_color
+  , size = size.tiny
+  , display = display.all - display.status_line
+  , editable = false)
+
+// Session High/Low Lines (intraday only - daily bars span all 24h so session detection is meaningless)
+if show_sessions and ses_show_hl and timeframe.isintraday
+    [ny_h, ny_l, ny_hl, ny_ll, ny_hlbl, ny_llbl] = ses_draw_hl(ses_is_ny, ses_show_ny, ses_ny_color, "NY")
+    [ld_h, ld_l, ld_hl, ld_ll, ld_hlbl, ld_llbl] = ses_draw_hl(ses_is_ldn, ses_show_ldn, ses_ldn_color, "LD")
+    [as_h, as_l, as_hl, as_ll, as_hlbl, as_llbl] = ses_draw_hl(ses_is_asia, ses_show_asia, ses_asia_color, "AS")
+
+    ses_thr = ta.atr(ATR_PERIOD_SESSION) * SES_OVERLAP_MULT
+
+    // LD overlaps NY → extend LD to +38
+    if ses_is_close(ld_h, ny_h, ses_thr) or ses_is_close(ld_h, ny_l, ses_thr)
+        line.set_x2(ld_hl, bar_index + SES_LINE_EXTENSION + 8), label.set_x(ld_hlbl, bar_index + SES_LINE_EXTENSION + 8)
+    if ses_is_close(ld_l, ny_h, ses_thr) or ses_is_close(ld_l, ny_l, ses_thr)
+        line.set_x2(ld_ll, bar_index + SES_LINE_EXTENSION + 8), label.set_x(ld_llbl, bar_index + SES_LINE_EXTENSION + 8)
+
+    // AS overlaps NY or LD → extend AS to +38, or +46 if both
+    as_h_vs_ny = ses_is_close(as_h, ny_h, ses_thr) or ses_is_close(as_h, ny_l, ses_thr)
+    as_h_vs_ld = ses_is_close(as_h, ld_h, ses_thr) or ses_is_close(as_h, ld_l, ses_thr)
+    if as_h_vs_ny and as_h_vs_ld
+        line.set_x2(as_hl, bar_index + SES_LINE_EXTENSION + 16), label.set_x(as_hlbl, bar_index + SES_LINE_EXTENSION + 16)
+    else if as_h_vs_ny or as_h_vs_ld
+        line.set_x2(as_hl, bar_index + SES_LINE_EXTENSION + 8), label.set_x(as_hlbl, bar_index + SES_LINE_EXTENSION + 8)
+
+    as_l_vs_ny = ses_is_close(as_l, ny_h, ses_thr) or ses_is_close(as_l, ny_l, ses_thr)
+    as_l_vs_ld = ses_is_close(as_l, ld_h, ses_thr) or ses_is_close(as_l, ld_l, ses_thr)
+    if as_l_vs_ny and as_l_vs_ld
+        line.set_x2(as_ll, bar_index + SES_LINE_EXTENSION + 16), label.set_x(as_llbl, bar_index + SES_LINE_EXTENSION + 16)
+    else if as_l_vs_ny or as_l_vs_ld
+        line.set_x2(as_ll, bar_index + SES_LINE_EXTENSION + 8), label.set_x(as_llbl, bar_index + SES_LINE_EXTENSION + 8)
+
+// ============================================================================
+//                          MODULE: SMC
+// ============================================================================
+
+// --- Settings: Strong/Weak HL ---
+
+smc_show_hl        = input.bool(true, "Strong/Weak High/Low", group="SMC - Strong/Weak HL")
+smc_hl_bull_color  = input.color(#000000, "Bullish Color", inline="hl_col", group="SMC - Strong/Weak HL")
+smc_hl_bear_color  = input.color(#000000, "Bearish Color", inline="hl_col", group="SMC - Strong/Weak HL")
+
+// --- Settings: Equal HL ---
+
+smc_show_eqhl      = input.bool(true, "Equal Highs/Lows", group="SMC - Equal HL")
+smc_eqhl_len       = input.int(3, "Bars Confirmation", minval=1, group="SMC - Equal HL")
+smc_eqhl_threshold = input.float(0.1, "Threshold", minval=0, maxval=0.5, step=0.1, group="SMC - Equal HL")
+
+// --- Settings: MTF Levels ---
+
+smc_show_daily     = input.bool(true, "Daily", inline="daily", group="SMC - MTF Levels")
+smc_daily_style    = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="daily", group="SMC - MTF Levels")
+smc_daily_color    = input.color(#000000, "", inline="daily", group="SMC - MTF Levels")
+smc_show_weekly    = input.bool(false, "Weekly", inline="weekly", group="SMC - MTF Levels")
+smc_weekly_style   = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="weekly", group="SMC - MTF Levels")
+smc_weekly_color   = input.color(#2157f3, "", inline="weekly", group="SMC - MTF Levels")
+smc_show_monthly   = input.bool(false, "Monthly", inline="monthly", group="SMC - MTF Levels")
+smc_monthly_style  = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="monthly", group="SMC - MTF Levels")
+smc_monthly_color  = input.color(#2157f3, "", inline="monthly", group="SMC - MTF Levels")
+
+// --- Settings: Zones ---
+
+smc_show_zones     = input.bool(true, "Premium/Discount Zones", group="SMC - Zones")
+smc_premium_color  = input.color(#f7525f, "Premium", inline="zone_col", group="SMC - Zones")
+smc_equil_color    = input.color(#878b94, "Equilibrium", inline="zone_col", group="SMC - Zones")
+smc_discount_color = input.color(#22ab94, "Discount", inline="zone_col", group="SMC - Zones")
+
+// --- Constants ---
+
+// Auto-adjusts based on timeframe to capture meaningful swing structure
+// Lower TFs: more bars needed to filter noise
+// Higher TFs: fewer bars needed (each bar is more significant)
+smc_swing_len = switch
+    timeframe.isseconds => 50                                    // Seconds (rare)
+    timeframe.isminutes and timeframe.multiplier <= 5 => 20      // 1-5m: ~1.5 hours
+    timeframe.isminutes and timeframe.multiplier <= 15 => 25     // 6-15m: ~6 hours
+    timeframe.isminutes and timeframe.multiplier <= 30 => 30     // 16-30m: ~15 hours
+    timeframe.isminutes and timeframe.multiplier <= 60 => 35     // 31-60m: ~1.5 days
+    timeframe.isminutes and timeframe.multiplier <= 240 => 40    // 2-4H: ~7 days
+    timeframe.isdaily => 20                                      // Daily: ~1 month
+    timeframe.isweekly => 12                                     // Weekly: ~3 months
+    timeframe.ismonthly => 6                                     // Monthly: ~6 months
+    => 30                                                        // Default
+
+// --- Types ---
+
+type smc_trailing
+    float top
+    float bottom
+    int barTime
+    int barIndex
+    int lastTopTime
+    int lastBottomTime
+
+type smc_trend
+    int bias
+
+type smc_eqDisplay
+    line l_ine = na
+    label l_abel = na
+
+type smc_pivot
+    float currentLevel
+    float lastLevel
+    bool crossed
+    int barTime = na
+    int barIndex = na
+
+// --- Variables ---
+
+var smc_pivot smc_swingHigh     = smc_pivot.new(na, na, false)
+var smc_pivot smc_swingLow      = smc_pivot.new(na, na, false)
+var smc_pivot smc_equalHigh     = smc_pivot.new(na, na, false)
+var smc_pivot smc_equalLow      = smc_pivot.new(na, na, false)
+var smc_trend smc_swingTrend    = smc_trend.new(0)
+var smc_trailing smc_trail      = smc_trailing.new()
+var smc_eqDisplay smc_eqhDisp   = smc_eqDisplay.new()
+var smc_eqDisplay smc_eqlDisp   = smc_eqDisplay.new()
+var array<float> smc_highs      = array.new<float>()
+var array<float> smc_lows       = array.new<float>()
+var array<int> smc_times        = array.new<int>()
+var smc_initialTime             = time
+
+smc_atrMeasure = ta.atr(ATR_PERIOD_SWING)
+
+// Store price data (capped at SMC_MAX_ARRAY_SIZE to prevent unbounded memory growth)
+smc_highs.push(high)
+smc_lows.push(low)
+smc_times.push(time)
+
+if smc_highs.size() > SMC_MAX_ARRAY_SIZE
+    smc_highs.shift()
+    smc_lows.shift()
+    smc_times.shift()
+
+// --- Functions ---
+
+// Leg detection for swing structure
+smc_leg(int size) =>
+    var leg = 0
+    newLegHigh = high[size] > ta.highest(size)
+    newLegLow  = low[size] < ta.lowest(size)
+    if newLegHigh
+        leg := 0
+    else if newLegLow
+        leg := 1
+    leg
+
+smc_startOfNewLeg(int leg)     => ta.change(leg) != 0
+smc_startOfBullishLeg(int leg) => ta.change(leg) == 1
+smc_startOfBearishLeg(int leg) => ta.change(leg) == -1
+
+// Draw Equal High/Low
+smc_drawEqualHL(smc_pivot p, float level, int size, bool isHigh) =>
+    smc_eqDisplay disp = isHigh ? smc_eqhDisp : smc_eqlDisp
+    string tag = isHigh ? "EQH" : "EQL"
+    color eqColor = isHigh ? smc_hl_bear_color : smc_hl_bull_color
+    string lblStyle = isHigh ? label.style_label_down : label.style_label_up
+
+    line.delete(disp.l_ine)
+    label.delete(disp.l_abel)
+
+    disp.l_ine := line.new(chart.point.new(p.barTime, na, p.currentLevel), chart.point.new(time[size], na, level), xloc=xloc.bar_time, color=eqColor, style=line.style_dotted)
+    labelPos = math.round(0.5 * (p.barIndex + bar_index - size))
+    disp.l_abel := label.new(chart.point.new(na, labelPos, level), tag, xloc.bar_index, color=COLOR_TRANSPARENT, textcolor=eqColor, style=lblStyle, size=size.tiny)
+
+// Get current structure for EQH/EQL and swing tracking
+smc_getCurrentStructure(int size, bool forEqHL) =>
+    currentLeg = smc_leg(size)
+    newPivot = smc_startOfNewLeg(currentLeg)
+    pivotLow = smc_startOfBullishLeg(currentLeg)
+    pivotHigh = smc_startOfBearishLeg(currentLeg)
+
+    if newPivot
+        if pivotLow
+            smc_pivot p = forEqHL ? smc_equalLow : smc_swingLow
+
+            if forEqHL and show_smc and smc_show_eqhl and math.abs(p.currentLevel - low[size]) < smc_eqhl_threshold * smc_atrMeasure
+                smc_drawEqualHL(p, low[size], size, false)
+
+            p.lastLevel := p.currentLevel
+            p.currentLevel := low[size]
+            p.crossed := false
+            p.barTime := time[size]
+            p.barIndex := bar_index[size]
+
+            if not forEqHL
+                smc_trail.bottom := p.currentLevel
+                smc_trail.barTime := p.barTime
+                smc_trail.barIndex := p.barIndex
+                smc_trail.lastBottomTime := p.barTime
+        else
+            smc_pivot p = forEqHL ? smc_equalHigh : smc_swingHigh
+
+            if forEqHL and show_smc and smc_show_eqhl and math.abs(p.currentLevel - high[size]) < smc_eqhl_threshold * smc_atrMeasure
+                smc_drawEqualHL(p, high[size], size, true)
+
+            p.lastLevel := p.currentLevel
+            p.currentLevel := high[size]
+            p.crossed := false
+            p.barTime := time[size]
+            p.barIndex := bar_index[size]
+
+            if not forEqHL
+                smc_trail.top := p.currentLevel
+                smc_trail.barTime := p.barTime
+                smc_trail.barIndex := p.barIndex
+                smc_trail.lastTopTime := p.barTime
+
+// Detect swing structure for trend (no display)
+smc_detectSwingTrend() =>
+    if ta.crossover(close, smc_swingHigh.currentLevel) and not smc_swingHigh.crossed
+        smc_swingHigh.crossed := true
+        smc_swingTrend.bias := BULLISH
+
+    if ta.crossunder(close, smc_swingLow.currentLevel) and not smc_swingLow.crossed
+        smc_swingLow.crossed := true
+        smc_swingTrend.bias := BEARISH
+
+// Update trailing extremes
+smc_updateTrailing() =>
+    smc_trail.top := math.max(high, smc_trail.top)
+    smc_trail.lastTopTime := smc_trail.top == high ? time : smc_trail.lastTopTime
+    smc_trail.bottom := math.min(low, smc_trail.bottom)
+    smc_trail.lastBottomTime := smc_trail.bottom == low ? time : smc_trail.lastBottomTime
+
+// Draw Strong/Weak High Low
+smc_drawHighLowSwings() =>
+    var line topLine = line.new(na, na, na, na, color=smc_hl_bear_color, xloc=xloc.bar_time)
+    var line bottomLine = line.new(na, na, na, na, color=smc_hl_bull_color, xloc=xloc.bar_time)
+    var label topLabel = label.new(na, na, color=COLOR_TRANSPARENT, textcolor=smc_hl_bear_color, xloc=xloc.bar_time, style=label.style_label_down, size=size.tiny)
+    var label bottomLabel = label.new(na, na, color=COLOR_TRANSPARENT, textcolor=smc_hl_bull_color, xloc=xloc.bar_time, style=label.style_label_up, size=size.tiny)
+
+    rightTimeBar = last_bar_time + MTF_TIME_EXTENSION * (time - time[1])
+
+    topLine.set_first_point(chart.point.new(smc_trail.lastTopTime, na, smc_trail.top))
+    topLine.set_second_point(chart.point.new(rightTimeBar, na, smc_trail.top))
+    topLabel.set_point(chart.point.new(rightTimeBar, na, smc_trail.top))
+    topLabel.set_text(smc_swingTrend.bias == BEARISH ? "Strong High" : "Weak High")
+
+    bottomLine.set_first_point(chart.point.new(smc_trail.lastBottomTime, na, smc_trail.bottom))
+    bottomLine.set_second_point(chart.point.new(rightTimeBar, na, smc_trail.bottom))
+    bottomLabel.set_point(chart.point.new(rightTimeBar, na, smc_trail.bottom))
+    bottomLabel.set_text(smc_swingTrend.bias == BULLISH ? "Strong Low" : "Weak Low")
+
+// Check if higher timeframe
+smc_higherTF(string tf) => timeframe.in_seconds() > timeframe.in_seconds(tf)
+
+// Draw MTF levels
+smc_drawLevels(string tf, bool sameTF, string style, color levelColor) =>
+    [topLevel, bottomLevel, leftTime, rightTime] = request.security(syminfo.tickerid, tf, [high[1], low[1], time[1], time], lookahead=barmerge.lookahead_on)
+
+    float parsedTop = sameTF ? high : topLevel
+    float parsedBottom = sameTF ? low : bottomLevel
+    int parsedLeftTime = sameTF ? time : leftTime
+    int parsedRightTime = sameTF ? time : rightTime
+    int parsedTopTime = time
+    int parsedBottomTime = time
+
+    if not sameTF
+        int leftIndex = smc_times.binary_search_rightmost(parsedLeftTime)
+        int rightIndex = smc_times.binary_search_rightmost(parsedRightTime)
+
+        if leftIndex < rightIndex
+            array<int> timeArray = smc_times.slice(leftIndex, rightIndex)
+            array<float> topArray = smc_highs.slice(leftIndex, rightIndex)
+            array<float> bottomArray = smc_lows.slice(leftIndex, rightIndex)
+
+            parsedTopTime := timeArray.size() > 0 ? timeArray.get(topArray.indexof(topArray.max())) : smc_initialTime
+            parsedBottomTime := timeArray.size() > 0 ? timeArray.get(bottomArray.indexof(bottomArray.min())) : smc_initialTime
+
+    var line topLine = line.new(na, na, na, na, xloc=xloc.bar_time, color=levelColor, style=f_getLineStyle(style))
+    var line bottomLine = line.new(na, na, na, na, xloc=xloc.bar_time, color=levelColor, style=f_getLineStyle(style))
+    var label topLabel = label.new(na, na, xloc=xloc.bar_time, text=str.format("P{0}H", tf), color=COLOR_TRANSPARENT, textcolor=levelColor, size=size.small, style=label.style_label_left)
+    var label bottomLabel = label.new(na, na, xloc=xloc.bar_time, text=str.format("P{0}L", tf), color=COLOR_TRANSPARENT, textcolor=levelColor, size=size.small, style=label.style_label_left)
+
+    rightEdge = last_bar_time + MTF_TIME_EXTENSION * (time - time[1])
+
+    topLine.set_first_point(chart.point.new(parsedTopTime, na, parsedTop))
+    topLine.set_second_point(chart.point.new(rightEdge, na, parsedTop))
+    topLabel.set_point(chart.point.new(rightEdge, na, parsedTop))
+
+    bottomLine.set_first_point(chart.point.new(parsedBottomTime, na, parsedBottom))
+    bottomLine.set_second_point(chart.point.new(rightEdge, na, parsedBottom))
+    bottomLabel.set_point(chart.point.new(rightEdge, na, parsedBottom))
+
+// Draw zone helper
+smc_drawZone(float labelLevel, int labelIndex, float top, float bottom, string tag, color zoneColor, string style, int opacity = 100) =>
+    var label l = label.new(na, na, text=tag, color=COLOR_TRANSPARENT, textcolor=zoneColor, style=style, size=size.small)
+    var box b = box.new(na, na, na, na, bgcolor=color.new(zoneColor, opacity), border_color=COLOR_TRANSPARENT, xloc=xloc.bar_time)
+
+    b.set_top_left_point(chart.point.new(smc_trail.barTime, na, top))
+    b.set_bottom_right_point(chart.point.new(last_bar_time, na, bottom))
+    l.set_point(chart.point.new(na, labelIndex, labelLevel))
+
+// Draw Premium/Discount Zones
+smc_drawPremiumDiscount() =>
+    smc_drawZone(smc_trail.top, math.round(0.5 * (smc_trail.barIndex + last_bar_index)), smc_trail.top, 0.95 * smc_trail.top + 0.05 * smc_trail.bottom, "Premium", smc_premium_color, label.style_label_down)
+
+    equilibriumLevel = math.avg(smc_trail.top, smc_trail.bottom)
+    smc_drawZone(equilibriumLevel, last_bar_index, 0.525 * smc_trail.top + 0.475 * smc_trail.bottom, 0.525 * smc_trail.bottom + 0.475 * smc_trail.top, "Equilibrium", smc_equil_color, label.style_label_left, 80)
+
+    smc_drawZone(smc_trail.bottom, math.round(0.5 * (smc_trail.barIndex + last_bar_index)), 0.95 * smc_trail.bottom + 0.05 * smc_trail.top, smc_trail.bottom, "Discount", smc_discount_color, label.style_label_up)
+
+// --- Execution ---
+
+// Update trailing and structure
+if show_smc and (smc_show_hl or smc_show_zones)
+    smc_updateTrailing()
+
+// Get swing structure (needed for Strong/Weak detection)
+smc_getCurrentStructure(smc_swing_len, false)
+
+// Detect swing trend
+smc_detectSwingTrend()
+
+// Draw Strong/Weak labels (only when SMC enabled)
+if show_smc and smc_show_hl
+    smc_drawHighLowSwings()
+
+// Get EQH/EQL structure
+if show_smc and smc_show_eqhl
+    smc_getCurrentStructure(smc_eqhl_len, true)
+
+// Premium/Discount Zones
+if show_smc and smc_show_zones
+    smc_drawPremiumDiscount()
+
+// MTF Levels - draw on last confirmed bar or realtime
+varip int smc_currentBarIndex = bar_index
+varip int smc_lastBarIndex = bar_index
+smc_lastBarIndex := smc_currentBarIndex
+smc_currentBarIndex := bar_index
+smc_newBar = smc_currentBarIndex != smc_lastBarIndex
+
+if barstate.islastconfirmedhistory or (barstate.isrealtime and smc_newBar)
+    if show_smc and smc_show_daily and not smc_higherTF("D")
+        smc_drawLevels("D", timeframe.isdaily, smc_daily_style, smc_daily_color)
+
+    if show_smc and smc_show_weekly and not smc_higherTF("W")
+        smc_drawLevels("W", timeframe.isweekly, smc_weekly_style, smc_weekly_color)
+
+    if show_smc and smc_show_monthly and not smc_higherTF("M")
+        smc_drawLevels("M", timeframe.ismonthly, smc_monthly_style, smc_monthly_color)
+
+// ============================================================================
+//                    MODULE: ChoCH / BOS (Market Structure)
+// ============================================================================
+// Swing detection via ta.pivothigh / ta.pivotlow (Pine v6 compatible)
+
+// --- Settings ---
+
+cb_length  = input.int(1, "Pivot Length", minval=1, group='ChoCH / BOS')
+cb_bullCss = input.color(color.new(#22ab94, 0), "Bullish", group='ChoCH / BOS', inline='cb_bull')
+cb_bearCss = input.color(color.new(#f7525f, 0), "Bearish", group='ChoCH / BOS', inline='cb_bear')
+
+// --- Swing Detection ---
+
+cb_ph = ta.pivothigh(high, cb_length, cb_length)
+cb_pl = ta.pivotlow(low, cb_length, cb_length)
+
+var float cb_upper_val = na
+var int   cb_upper_loc = na
+var bool  cb_upper_crossed = false
+
+var float cb_lower_val = na
+var int   cb_lower_loc = na
+var bool  cb_lower_crossed = false
+
+var int cb_os = 0
+
+if not na(cb_ph)
+    cb_upper_val := high[cb_length]
+    cb_upper_loc := bar_index - cb_length
+    cb_upper_crossed := false
+
+if not na(cb_pl)
+    cb_lower_val := low[cb_length]
+    cb_lower_loc := bar_index - cb_length
+    cb_lower_crossed := false
+
+// --- Bullish ChoCH/BOS: close crosses above swing high ---
+
+if ta.crossover(close, cb_upper_val) and not cb_upper_crossed
+    if show_choch_bos
+        line.new(cb_upper_loc, cb_upper_val, bar_index, cb_upper_val, color = cb_bullCss)
+        label.new(int(math.avg(bar_index, cb_upper_loc)), cb_upper_val, cb_os == -1 ? 'ChoCH' : 'BOS'
+          , color = COLOR_TRANSPARENT
+          , textcolor = cb_bullCss
+          , style = label.style_label_down
+          , size = size.tiny)
+
+    cb_upper_crossed := true
+    cb_os := 1
+
+// --- Bearish ChoCH/BOS: close crosses below swing low ---
+
+if ta.crossunder(close, cb_lower_val) and not cb_lower_crossed
+    if show_choch_bos
+        line.new(cb_lower_loc, cb_lower_val, bar_index, cb_lower_val, color = cb_bearCss)
+        label.new(int(math.avg(bar_index, cb_lower_loc)), cb_lower_val, cb_os == 1 ? 'ChoCH' : 'BOS'
+          , color = COLOR_TRANSPARENT
+          , textcolor = cb_bearCss
+          , style = label.style_label_up
+          , size = size.tiny)
+
+    cb_lower_crossed := true
+    cb_os := -1
+
+bool alert_choch_bull = cb_os == 1 and cb_os[1] != 1
+bool alert_choch_bear = cb_os == -1 and cb_os[1] != -1
+
+// ============================================================================
+//                         MODULE: FAIR VALUE GAPS
+// ============================================================================
+
+// --- Settings ---
+
+ict_mode     = input.string('Present', "Mode", options=['Present', 'Historical'], group='Fair Value Gaps')
+ict_FVG_type = input.string('FVG', "Type", group='Fair Value Gaps', options=['FVG', 'IFVG'],
+               tooltip='Fair Value Gaps or Implied Fair Value Gaps')
+ict_visBxs   = input.int(1, "# Visible FVG's", group='Fair Value Gaps',
+               minval=1, maxval=20, tooltip='In the same direction')
+ict_cFVGbl   = input.color(color.new(#22ab94, 0), "Bullish FVG  ", group='Fair Value Gaps', inline='FVGbl')
+ict_cFVGblBR = input.color(color.new(#22ab94, 50), "Break", group='Fair Value Gaps', inline='FVGbl')
+ict_cFVGbr   = input.color(color.new(#f7525f, 0), "Bearish FVG ", group='Fair Value Gaps', inline='FVGbr')
+ict_cFVGbrBR = input.color(color.new(#f7525f, 50), "Break", group='Fair Value Gaps', inline='FVGbr')
+
+// --- Types ---
+
+type ict_FVG
+    box  bx
+    bool active
+
+// --- Variables ---
+
+ict_len       = 2
+ict_per       = ict_mode == 'Present' ? last_bar_index - bar_index <= FVG_PRESENT_LIMIT : true
+ict_mx        = math.max(close, open)
+ict_mn        = math.min(close, open)
+ict_body      = math.abs(close - open)
+ict_meanBody  = ta.sma(ict_body, ict_len)
+
+var ict_FVG[] ict_bFVG_UP = array.new<ict_FVG>()
+var ict_FVG[] ict_bFVG_DN = array.new<ict_FVG>()
+
+// --- Execution: Fair Value Gaps ---
+
+// Candle analysis for FVG
+ict_L_body   = high - ict_mx < ict_body * FVG_BODY_THRESHOLD and ict_mn - low < ict_body * FVG_BODY_THRESHOLD
+ict_L_bodyUP = ict_body > ict_meanBody and ict_L_body and close > open
+ict_L_bodyDN = ict_body > ict_meanBody and ict_L_body and close < open
+
+// Imbalance detection
+ict_imbalanceUP = ict_L_bodyUP[1] and (ict_FVG_type == 'FVG' ? low > high[2] : low < high[2])
+ict_imbalanceDN = ict_L_bodyDN[1] and (ict_FVG_type == 'FVG' ? high < low[2] : high > low[2])
+
+// Initialize FVG arrays
+if barstate.isfirst
+    for i = 0 to ict_visBxs - 1
+        ict_bFVG_UP.unshift(ict_FVG.new(box(na), false))
+        ict_bFVG_DN.unshift(ict_FVG.new(box(na), false))
+
+// Create bullish FVGs
+if ict_imbalanceUP and ict_per and show_fvg
+    if ict_imbalanceUP[1]
+        ict_bFVG_UP.get(0).bx.set_lefttop(bar_index - 2, low)
+        ict_bFVG_UP.get(0).bx.set_rightbottom(bar_index + FVG_EXTENSION_BARS, high[2])
+    else
+        ict_bFVG_UP.unshift(ict_FVG.new(
+          box.new(
+           bar_index - 2
+         , ict_FVG_type == 'FVG' ? low : high[2]
+         , bar_index, ict_FVG_type == 'FVG' ? high[2] : low
+         , bgcolor      = color.new(ict_cFVGbl, 90)
+         , border_color = color.new(ict_cFVGbl, 65)
+         , text_color   = color.new(ict_cFVGbl, 100)
+         , text_size = size.small
+         , text = '')
+         , true))
+        ict_bFVG_UP.pop().bx.delete()
+
+// Create bearish FVGs
+if ict_imbalanceDN and ict_per and show_fvg
+    if ict_imbalanceDN[1]
+        ict_bFVG_DN.get(0).bx.set_lefttop(bar_index - 2, low[2])
+        ict_bFVG_DN.get(0).bx.set_rightbottom(bar_index + FVG_EXTENSION_BARS, high)
+    else
+        ict_bFVG_DN.unshift(ict_FVG.new(
+          box.new(
+           bar_index - 2
+         , ict_FVG_type == 'FVG' ? low[2] : high
+         , bar_index, ict_FVG_type == 'FVG' ? high : low[2]
+         , bgcolor      = color.new(ict_cFVGbr, 90)
+         , border_color = color.new(ict_cFVGbr, 65)
+         , text_color   = color.new(ict_cFVGbr, 100)
+         , text_size = size.small
+         , text = '')
+         , true))
+        ict_bFVG_DN.pop().bx.delete()
+
+// FVG break detection
+for i = 0 to math.min(FVG_BREAK_LOOKBACK, ict_bFVG_UP.size() - 1)
+    getUPi = ict_bFVG_UP.get(i)
+    if getUPi.active
+        getUPi.bx.set_right(bar_index + FVG_EXTENSION_BARS)
+        if low < getUPi.bx.get_top()
+            getUPi.bx.set_border_style(line.style_dashed)
+        if low < getUPi.bx.get_bottom()
+            getUPi.bx.delete()
+            getUPi.active := false
+
+for i = 0 to math.min(FVG_BREAK_LOOKBACK, ict_bFVG_DN.size() - 1)
+    getDNi = ict_bFVG_DN.get(i)
+    if getDNi.active
+        getDNi.bx.set_right(bar_index + FVG_EXTENSION_BARS)
+        if high > getDNi.bx.get_bottom()
+            getDNi.bx.set_border_style(line.style_dashed)
+        if high > getDNi.bx.get_top()
+            getDNi.bx.delete()
+            getDNi.active := false
+
+// --- Shared FVG State (computed once, consumed by Confluence + Entry + Alerts) ---
+
+fvg_has_active_bull = false
+fvg_has_active_bear = false
+fvg_active_bull_top = float(na)
+fvg_active_bull_btm = float(na)
+fvg_active_bear_top = float(na)
+fvg_active_bear_btm = float(na)
+fvg_is_bull_broken  = false
+fvg_is_bear_broken  = false
+
+for i = 0 to math.min(FVG_BREAK_LOOKBACK, ict_bFVG_UP.size() - 1)
+    bxi = ict_bFVG_UP.get(i)
+    if bxi.active
+        if not fvg_has_active_bull
+            fvg_has_active_bull := true
+            fvg_active_bull_top := bxi.bx.get_top()
+            fvg_active_bull_btm := bxi.bx.get_bottom()
+        if low < bxi.bx.get_bottom()
+            fvg_is_bull_broken := true
+
+for i = 0 to math.min(FVG_BREAK_LOOKBACK, ict_bFVG_DN.size() - 1)
+    bxi = ict_bFVG_DN.get(i)
+    if bxi.active
+        if not fvg_has_active_bear
+            fvg_has_active_bear := true
+            fvg_active_bear_top := bxi.bx.get_top()
+            fvg_active_bear_btm := bxi.bx.get_bottom()
+        if high > bxi.bx.get_top()
+            fvg_is_bear_broken := true
+
+// ============================================================================
+//                     MODULE: LIQUIDITY SWINGS
+// ============================================================================
+
+// --- Settings ---
+
+liq_topCss     = input.color(#f7525f, "Swing High", inline="liq_top", group='Liquidity Swings')
+liq_topAreaCss = input.color(color.new(#f7525f, 50), "Area", inline="liq_top", group='Liquidity Swings')
+liq_btmCss     = input.color(#22ab94, "Swing Low", inline="liq_btm", group='Liquidity Swings')
+liq_btmAreaCss = input.color(color.new(#22ab94, 50), "Area", inline="liq_btm", group='Liquidity Swings')
+liq_labelSize  = input.string('Tiny', 'Labels Size', options=['Tiny', 'Small', 'Normal'], group='Liquidity Swings')
+
+// --- Variables ---
+
+var float liq_ph_top = na
+var float liq_ph_btm = na
+var bool  liq_ph_crossed = false
+var int   liq_ph_x1 = 0
+var box   liq_ph_bx = box.new(na, na, na, na
+  , bgcolor = color.new(liq_topAreaCss, 80)
+  , border_color = na)
+
+var float liq_pl_top = na
+var float liq_pl_btm = na
+var bool  liq_pl_crossed = false
+var int   liq_pl_x1 = 0
+var box   liq_pl_bx = box.new(na, na, na, na
+  , bgcolor = color.new(liq_btmAreaCss, 80)
+  , border_color = na)
+
+// --- Functions ---
+
+liq_get_counts(bool is_pivot, float top, float btm) =>
+    var count = 0
+    var vol = 0.
+    if is_pivot
+        count := 0
+        vol := 0.
+    else
+        vol += low[LIQ_SWING_LENGTH] < top and high[LIQ_SWING_LENGTH] > btm ? volume[LIQ_SWING_LENGTH] : 0
+        count += low[LIQ_SWING_LENGTH] < top and high[LIQ_SWING_LENGTH] > btm ? 1 : 0
+    [count, vol]
+
+liq_set_label(count, vol, x, y, css, lbl_style) =>
+    var label lbl = na
+    var lbl_size = f_getLabelSize(liq_labelSize)
+    if ta.crossover(count, 0)
+        label.delete(lbl)
+        lbl := label.new(x, y, str.tostring(vol, format.volume)
+          , style = lbl_style
+          , size = lbl_size
+          , color = COLOR_TRANSPARENT
+          , textcolor = color.new(css, 100))
+    if count > 0
+        label.set_text(lbl, str.tostring(vol, format.volume))
+
+liq_set_level(bool is_pivot, bool crossed, float value, count, css) =>
+    var line lvl = na
+    if is_pivot
+        if count[1] < 0
+            line.delete(lvl[1])
+        else if not crossed[1]
+            line.set_x2(lvl, bar_index - LIQ_SWING_LENGTH)
+        line.delete(lvl)
+        lvl := line.new(bar_index - LIQ_SWING_LENGTH, value, bar_index, value, color = na)
+    if not crossed[1]
+        line.set_x2(lvl, bar_index + 3)
+    if crossed and not crossed[1]
+        line.set_x2(lvl, bar_index)
+        line.set_style(lvl, line.style_dashed)
+    if count > 0
+        line.set_color(lvl, css)
+
+liq_set_zone(bool is_pivot, int x, float top, float btm, count, css) =>
+    var box bx = na
+    if ta.crossover(count, 0)
+        box.delete(bx)
+        bx := box.new(x, top, x + count, btm
+          , border_color = na
+          , bgcolor = css)
+    if count > 0
+        box.set_right(bx, x + count)
+
+// --- Execution ---
+
+liq_ph = ta.pivothigh(LIQ_SWING_LENGTH, LIQ_SWING_LENGTH)
+liq_pl = ta.pivotlow(LIQ_SWING_LENGTH, LIQ_SWING_LENGTH)
+
+// Pivot high counts
+[liq_ph_count, liq_ph_vol] = liq_get_counts(not na(liq_ph), liq_ph_top, liq_ph_btm)
+
+// Pivot high data update
+if show_liq
+    if not na(liq_ph)
+        liq_ph_top := high[LIQ_SWING_LENGTH]
+        liq_ph_btm := math.max(close[LIQ_SWING_LENGTH], open[LIQ_SWING_LENGTH])
+        liq_ph_x1 := bar_index - LIQ_SWING_LENGTH
+        liq_ph_crossed := false
+    else
+        liq_ph_crossed := close > liq_ph_top ? true : liq_ph_crossed
+
+// Pivot high display (only when liq enabled)
+if show_liq
+    if not na(liq_ph)
+        box.set_lefttop(liq_ph_bx, liq_ph_x1, liq_ph_top)
+        box.set_rightbottom(liq_ph_bx, liq_ph_x1, liq_ph_btm)
+    else
+        if liq_ph_crossed
+            box.set_right(liq_ph_bx, liq_ph_x1)
+        else
+            box.set_right(liq_ph_bx, bar_index + 3)
+
+    liq_set_zone(not na(liq_ph), liq_ph_x1, liq_ph_top, liq_ph_btm, liq_ph_count, liq_topAreaCss)
+    liq_set_level(not na(liq_ph), liq_ph_crossed, liq_ph_top, liq_ph_count, liq_topCss)
+    liq_set_label(liq_ph_count, liq_ph_vol, liq_ph_x1, liq_ph_top, liq_topCss, label.style_label_down)
+
+// Pivot low counts
+[liq_pl_count, liq_pl_vol] = liq_get_counts(not na(liq_pl), liq_pl_top, liq_pl_btm)
+
+// Pivot low data update
+if show_liq
+    if not na(liq_pl)
+        liq_pl_top := math.min(close[LIQ_SWING_LENGTH], open[LIQ_SWING_LENGTH])
+        liq_pl_btm := low[LIQ_SWING_LENGTH]
+        liq_pl_x1 := bar_index - LIQ_SWING_LENGTH
+        liq_pl_crossed := false
+    else
+        liq_pl_crossed := close < liq_pl_btm ? true : liq_pl_crossed
+
+// Pivot low display (only when liq enabled)
+if show_liq
+    if not na(liq_pl)
+        box.set_lefttop(liq_pl_bx, liq_pl_x1, liq_pl_top)
+        box.set_rightbottom(liq_pl_bx, liq_pl_x1, liq_pl_btm)
+    else
+        if liq_pl_crossed
+            box.set_right(liq_pl_bx, liq_pl_x1)
+        else
+            box.set_right(liq_pl_bx, bar_index + 3)
+
+    liq_set_zone(not na(liq_pl), liq_pl_x1, liq_pl_top, liq_pl_btm, liq_pl_count, liq_btmAreaCss)
+    liq_set_level(not na(liq_pl), liq_pl_crossed, liq_pl_btm, liq_pl_count, liq_btmCss)
+    liq_set_label(liq_pl_count, liq_pl_vol, liq_pl_x1, liq_pl_btm, liq_btmCss, label.style_label_up)
+
+// ============================================================================
+//                      MODULE: CANDLESTICK CHANNELS
+// ============================================================================
+// Candlestick Channels [LuxAlgo] - pattern-based dynamic channels
+// Patterns converge upper/lower bands on detection, creating trend channels
+
+// --- Settings ---
+
+cp_trend_length = input.int(14, "Trend Length", minval=0, group="Candlestick Patterns")
+
+cp_show_hammer   = input.bool(true, "Hammer", group="Candlestick Patterns")
+cp_show_ihammer  = input.bool(true, "Inverted Hammer", group="Candlestick Patterns")
+cp_show_shooting = input.bool(true, "Shooting Star", group="Candlestick Patterns")
+cp_show_hanging  = input.bool(true, "Hanging Man", group="Candlestick Patterns")
+cp_show_bulleng  = input.bool(true, "Bullish Engulfing", group="Candlestick Patterns")
+cp_show_beareng  = input.bool(true, "Bearish Engulfing", group="Candlestick Patterns")
+cp_show_wm       = input.bool(true, "White Marubozu", group="Candlestick Patterns")
+cp_show_bm       = input.bool(true, "Black Marubozu", group="Candlestick Patterns")
+
+cp_bull_color = input.color(#22ab94, "Bullish Color", inline="cp_col", group="Candlestick Patterns")
+cp_bear_color = input.color(#f7525f, "Bearish Color", inline="cp_col", group="Candlestick Patterns")
+
+// --- Variables / Functions ---
+
+cp_atr = ta.atr(ATR_PERIOD_PATTERN) / 2
+cp_st = ta.stoch(close, close, close, cp_trend_length)
+cp_downtrend = cp_st < 50
+cp_uptrend = cp_st > 50
+
+cp_d = math.abs(close - open)
+
+cp_lbl(y, txt, direction, tlt) =>
+    if show_candle_patterns
+        label.new(bar_index, y, txt, size=size.tiny, style=direction == 1 ? label.style_label_up : label.style_label_down, color=direction == 1 ? cp_bull_color : cp_bear_color, textcolor=color.white, tooltip=tlt)
+
+// --- Tooltips ---
+
+var cp_hammer_tlt = "The hammer candlestick pattern is formed of a short body with a long lower wick, and is found at the bottom of a downward trend."
+  + "\n" + "\nA hammer shows that although there were selling pressures during the day, ultimately a strong buying pressure drove the price back up."
+
+var cp_ihammer_tlt = "The inverted hammer is a similar pattern than the hammer pattern. The only difference being that the upper wick is long, while the lower wick is short."
+  + "\n" + "\nIt indicates a buying pressure, followed by a selling pressure that was not strong enough to drive the market price down. The inverse hammer suggests that buyers will soon have control of the market."
+
+var cp_bulleng_tlt = "The bullish engulfing pattern is formed of two candlesticks. The first candle is a short red body that is completely engulfed by a larger green candle."
+  + "\n" + "\nThough the second day opens lower than the first, the bullish market pushes the price up, culminating in an obvious win for buyers."
+
+var cp_wm_tlt = "The white marubozu is a single candle formation formed after a downtrend and indicating a bullish reversal."
+  + "\n" + "\nThis candlestick has a long bullish body with no upper or lower shadows, reflecting a strong buying pressure."
+
+var cp_shooting_tlt = "The shooting star is the same shape as the inverted hammer, but is formed in an uptrend: it has a small lower body, and a long upper wick."
+  + "\n" + "\nUsually, the market will gap slightly higher on opening and rally to an intra-day high before closing at a price just above the open - like a star falling to the ground."
+
+var cp_hanging_tlt = "The hanging man is the bearish equivalent of a hammer; it has the same shape but forms at the end of an uptrend."
+  + "\n" + "\nIt indicates that there was a significant sell-off during the day, but that buyers were able to push the price up again. The large sell-off is often seen as an indication that the bulls are losing control of the market."
+
+var cp_beareng_tlt = "A bearish engulfing pattern occurs at the end of an uptrend. The first candle has a small green body that is engulfed by a subsequent long red candle."
+  + "\n" + "\nIt signifies a peak or slowdown of price movement, and is a sign of an impending market downturn. The lower the second candle goes, the more significant the trend is likely to be."
+
+var cp_bm_tlt = "The black marubozu is a single candle formation formed after an uptrend and indicating a bearish reversal."
+  + "\n" + "\nThis candlestick has a long bearish body with no upper or lower shadows, reflecting a strong selling pressure."
+
+// --- Pattern Rules ---
+
+cp_hammer   = cp_downtrend and math.min(open, close) - low > 2 * cp_d and high - math.max(close, open) < cp_d / 4
+cp_ihammer  = cp_downtrend and high - math.max(open, close) > 2 * cp_d and math.min(close, open) - low < cp_d / 4
+
+cp_shooting = cp_uptrend and high - math.max(open, close) > 2 * cp_d and math.min(close, open) - low < cp_d / 4
+cp_hanging  = cp_uptrend and math.min(open, close) - low > 2 * cp_d and high - math.max(close, open) < cp_d / 4
+
+cp_bulleng  = cp_downtrend and close > open and close[1] < open[1] and close > open[1] and cp_d > cp_atr
+cp_beareng  = cp_uptrend and close < open and close[1] > open[1] and close < open[1] and cp_d > cp_atr
+
+cp_wm = close > open and high - math.max(open, close) + math.min(open, close) - low < cp_d / 10 and cp_d > cp_atr and cp_downtrend[1]
+cp_bm = close < open and high - math.max(open, close) + math.min(open, close) - low < cp_d / 10 and cp_d > cp_atr and cp_uptrend[1]
+
+// --- Channel Calculation ---
+
+// Bullish Patterns
+if cp_hammer and cp_show_hammer
+    cp_lbl(low, "H", 1, cp_hammer_tlt)
+
+if cp_ihammer and cp_show_ihammer
+    cp_lbl(low, "IH", 1, cp_ihammer_tlt)
+
+if cp_bulleng and cp_show_bulleng
+    cp_lbl(low, "BE", 1, cp_bulleng_tlt)
+
+if cp_wm and cp_show_wm
+    cp_lbl(low, "WM", 1, cp_wm_tlt)
+
+// Bearish Patterns
+if cp_shooting and cp_show_shooting
+    cp_lbl(high, "SS", 0, cp_shooting_tlt)
+
+if cp_hanging and cp_show_hanging
+    cp_lbl(high, "HM", 0, cp_hanging_tlt)
+
+if cp_beareng and cp_show_beareng
+    cp_lbl(high, "BE", 0, cp_beareng_tlt)
+
+if cp_bm and cp_show_bm
+    cp_lbl(high, "BM", 0, cp_bm_tlt)
+
+// ============================================================================
+//                       MODULE: MTF BIAS TABLE
+// ============================================================================
+
+// --- Settings ---
+
+bias_position  = input.string("Top Right", "Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="MTF Bias Table")
+// --- CHoCH detection (Pivot approach, same as chart module) ---
+// Pivot length 1. Close crossing swing high = bullish, swing low = bearish.
+
+bias_choch() =>
+    var int os = 0
+    ph = ta.pivothigh(high, 1, 1)
+    pl = ta.pivotlow(low, 1, 1)
+
+    var float upper_val = na
+    var bool  upper_crossed = false
+    var float lower_val = na
+    var bool  lower_crossed = false
+
+    if not na(ph)
+        upper_val := high[1]
+        upper_crossed := false
+    if not na(pl)
+        lower_val := low[1]
+        lower_crossed := false
+
+    if ta.crossover(close, upper_val) and not upper_crossed
+        os := 1
+        upper_crossed := true
+    if ta.crossunder(close, lower_val) and not lower_crossed
+        os := -1
+        lower_crossed := true
+
+    os
+
+// --- EMA alignment (EMA 50 vs EMA 100 & 200) ---
+
+bias_ema() =>
+    e1 = ta.ema(close, 50)
+    e2 = ta.ema(close, 100)
+    e3 = ta.ema(close, 200)
+    e1 > e2 and e1 > e3 ? 1 : e1 < e2 and e1 < e3 ? -1 : 0
+
+// --- Request each timeframe (consolidated: CHoCH + EMA in single call per TF) ---
+
+bias_combined() =>
+    [bias_choch(), bias_ema()]
+
+[bias_1m,  ema_1m]  = request.security(syminfo.tickerid, "1",   bias_combined())
+[bias_5m,  ema_5m]  = request.security(syminfo.tickerid, "5",   bias_combined())
+[bias_15m, ema_15m] = request.security(syminfo.tickerid, "15",  bias_combined())
+[bias_1h,  ema_1h]  = request.security(syminfo.tickerid, "60",  bias_combined())
+[bias_4h,  ema_4h]  = request.security(syminfo.tickerid, "240", bias_combined())
+[bias_d,   ema_d]   = request.security(syminfo.tickerid, "D",   bias_combined())
+[bias_w,   ema_w]   = request.security(syminfo.tickerid, "W",   bias_combined())
+
+// --- Table ---
+
+bias_pos = switch bias_position
+    "Top Right"    => position.top_right
+    "Top Left"     => position.top_left
+    "Bottom Right" => position.bottom_right
+    "Bottom Left"  => position.bottom_left
+
+bias_color(int b) => b == 1 ? COLOR_BULL : b == -1 ? COLOR_BEAR : COLOR_NEUTRAL
+
+choch_tip(string tf, int b) =>
+    b == 1 ? tf + ": Close broke above swing high → Bullish CHoCH" : b == -1 ? tf + ": Close broke below swing low → Bearish CHoCH" : tf + ": No change of character detected"
+
+ema_tip(string tf, int b) =>
+    b == 1 ? tf + ": EMA 50 above EMA 100 & 200 → Bullish alignment" : b == -1 ? tf + ": EMA 50 below EMA 100 & 200 → Bearish alignment" : tf + ": EMAs mixed - no clear alignment"
+
+var table bias_tbl = table.new(bias_pos, 8, 6, border_width=1)
+
+if show_bias_table and barstate.islast
+
+    // Header row
+    table.cell(bias_tbl, 0, 0, "",     text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 1, 0, "1m",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 2, 0, "5m",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 3, 0, "15m",  text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 4, 0, "1H",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 5, 0, "4H",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 6, 0, "D",    text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 7, 0, "W",    text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+
+    // CHoCH row
+    table.cell(bias_tbl, 0, 1, "CHoCH",  text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip="CHoCH - close breaking above swing high (bullish) or below swing low (bearish) on individual candles")
+    table.cell(bias_tbl, 1, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_1m),  tooltip=choch_tip("1m",  bias_1m))
+    table.cell(bias_tbl, 2, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_5m),  tooltip=choch_tip("5m",  bias_5m))
+    table.cell(bias_tbl, 3, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_15m), tooltip=choch_tip("15m", bias_15m))
+    table.cell(bias_tbl, 4, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_1h),  tooltip=choch_tip("1H",  bias_1h))
+    table.cell(bias_tbl, 5, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_4h),  tooltip=choch_tip("4H",  bias_4h))
+    table.cell(bias_tbl, 6, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_d),   tooltip=choch_tip("D",   bias_d))
+    table.cell(bias_tbl, 7, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_w),   tooltip=choch_tip("W",   bias_w))
+
+    // EMA row
+    table.cell(bias_tbl, 0, 2, "EMA",  text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip="EMA alignment - EMA 50 position relative to EMA 100 & 200")
+    table.cell(bias_tbl, 1, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_1m),  tooltip=ema_tip("1m",  ema_1m))
+    table.cell(bias_tbl, 2, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_5m),  tooltip=ema_tip("5m",  ema_5m))
+    table.cell(bias_tbl, 3, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_15m), tooltip=ema_tip("15m", ema_15m))
+    table.cell(bias_tbl, 4, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_1h),  tooltip=ema_tip("1H",  ema_1h))
+    table.cell(bias_tbl, 5, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_4h),  tooltip=ema_tip("4H",  ema_4h))
+    table.cell(bias_tbl, 6, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_d),   tooltip=ema_tip("D",   ema_d))
+    table.cell(bias_tbl, 7, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_w),   tooltip=ema_tip("W",   ema_w))
+
+
+// ============================================================================
+//                     MODULE: CONFLUENCE SCORER
+// ============================================================================
+// Event-based scoring with bar expiry. Expiry auto-scales with timeframe so
+// "20 bars" means ~1.5 hours on 5m but ~20 days on Daily.
+
+// --- Settings ---
+
+conf_min_score     = input.int(4, "Min Score", minval=1, maxval=6, group="Confluence Scorer", tooltip="Minimum confluence score to qualify a trade setup (0-6)")
+conf_sweep_expiry  = input.int(20, "Sweep Expiry (bars)", minval=5, maxval=100, group="Confluence Scorer", tooltip="How many bars a sweep event stays valid. Auto-scales: 20 bars on 5m = ~1.5h, on 1H = ~1 day")
+conf_bos_expiry    = input.int(15, "BOS Expiry (bars)", minval=5, maxval=100, group="Confluence Scorer", tooltip="How many bars a BOS/ChoCH event stays valid")
+
+// --- Variables ---
+
+var int conf_sweep_high_bar = na
+var int conf_sweep_low_bar  = na
+var int conf_bos_bull_bar   = na
+var int conf_bos_bear_bar   = na
+
+// --- Shared edge booleans (computed once in their modules, reused here) ---
+// alert_sweep_high/low defined in Alerts section; computed here early for scorer
+alert_sweep_high = liq_ph_crossed and not liq_ph_crossed[1]
+alert_sweep_low  = liq_pl_crossed and not liq_pl_crossed[1]
+
+// --- Track event bars ---
+
+if alert_sweep_high
+    conf_sweep_high_bar := bar_index
+
+if alert_sweep_low
+    conf_sweep_low_bar := bar_index
+
+if alert_choch_bull
+    conf_bos_bull_bar := bar_index
+
+if alert_choch_bear
+    conf_bos_bear_bar := bar_index
+
+// --- Factor 1: Bias Aligned ---
+// Uses HTF bias data relative to chart timeframe. On lower TFs, checks higher
+// TFs for alignment. On higher TFs, uses what's available above.
+// Rule: need 2+ of the available HTF biases to agree.
+
+conf_bias_bull = false
+conf_bias_bear = false
+
+if timeframe.in_seconds() <= timeframe.in_seconds("15")
+    // Scalp/intraday: check 1H, 4H, D (3 levels above)
+    conf_bias_bull := (bias_1h == 1 ? 1 : 0) + (bias_4h == 1 ? 1 : 0) + (bias_d == 1 ? 1 : 0) >= 2
+    conf_bias_bear := (bias_1h == -1 ? 1 : 0) + (bias_4h == -1 ? 1 : 0) + (bias_d == -1 ? 1 : 0) >= 2
+else if timeframe.in_seconds() <= timeframe.in_seconds("60")
+    // 1H chart: check 4H, D, W
+    conf_bias_bull := (bias_4h == 1 ? 1 : 0) + (bias_d == 1 ? 1 : 0) + (bias_w == 1 ? 1 : 0) >= 2
+    conf_bias_bear := (bias_4h == -1 ? 1 : 0) + (bias_d == -1 ? 1 : 0) + (bias_w == -1 ? 1 : 0) >= 2
+else if timeframe.in_seconds() <= timeframe.in_seconds("240")
+    // 4H chart: check D, W
+    conf_bias_bull := bias_d == 1 and bias_w == 1
+    conf_bias_bear := bias_d == -1 and bias_w == -1
+else
+    // Daily+: check W only
+    conf_bias_bull := bias_w == 1
+    conf_bias_bear := bias_w == -1
+
+// --- Factor 2: Premium/Discount Zone ---
+conf_equilibrium = math.avg(smc_trail.top, smc_trail.bottom)
+conf_in_discount = not na(smc_trail.top) and not na(smc_trail.bottom) and close < conf_equilibrium
+conf_in_premium  = not na(smc_trail.top) and not na(smc_trail.bottom) and close > conf_equilibrium
+
+// --- Factor 3: Liquidity Swept (with bar-based expiry) ---
+conf_swept_high = not na(conf_sweep_high_bar) and (bar_index - conf_sweep_high_bar) <= conf_sweep_expiry
+conf_swept_low  = not na(conf_sweep_low_bar) and (bar_index - conf_sweep_low_bar) <= conf_sweep_expiry
+
+// --- Factor 4: FVG Present (uses shared FVG state computed after FVG module) ---
+conf_fvg_bull = fvg_has_active_bull
+conf_fvg_bear = fvg_has_active_bear
+
+// --- Factor 5: BOS/ChoCH Confirmed (with bar-based expiry) ---
+conf_bos_bull = not na(conf_bos_bull_bar) and (bar_index - conf_bos_bull_bar) <= conf_bos_expiry
+conf_bos_bear = not na(conf_bos_bear_bar) and (bar_index - conf_bos_bear_bar) <= conf_bos_expiry
+
+// --- Factor 6: Session Active (only relevant for intraday) ---
+conf_session_active = timeframe.isintraday and (ses_is_ny or ses_is_ldn)
+// On daily+ TFs, session is always "true" (each bar spans full sessions)
+conf_session_score = timeframe.isintraday ? (conf_session_active ? 1 : 0) : 1
+
+// --- Calculate Scores ---
+conf_score_long  = (conf_bias_bull ? 1 : 0) + (conf_in_discount ? 1 : 0) + (conf_swept_low ? 1 : 0) + (conf_fvg_bull ? 1 : 0) + (conf_bos_bull ? 1 : 0) + conf_session_score
+conf_score_short = (conf_bias_bear ? 1 : 0) + (conf_in_premium ? 1 : 0) + (conf_swept_high ? 1 : 0) + (conf_fvg_bear ? 1 : 0) + (conf_bos_bear ? 1 : 0) + conf_session_score
+
+// --- Display: Confluence rows appended to bias table (rows 3-5) ---
+
+conf_factor_color(bool active) => active ? COLOR_BULL : COLOR_NEUTRAL
+
+// Confluence rows start at row 3 (right after EMA row 2)
+if show_confluence and barstate.islast
+    conf_row0 = show_bias_table ? 3 : 0
+    conf_row1 = conf_row0 + 1
+    conf_row2 = conf_row0 + 2
+
+    // Header: factor names
+    table.cell(bias_tbl, 0, conf_row0, "", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 1, conf_row0, "Bias", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 2, conf_row0, "Zone", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 3, conf_row0, "Sweep", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 4, conf_row0, "FVG", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 5, conf_row0, "BOS", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 6, conf_row0, "Ses", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 7, conf_row0, "Score", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+
+    // Long row
+    conf_long_ok = conf_score_long >= conf_min_score
+    ses_on = conf_session_score == 1
+    table.cell(bias_tbl, 0, conf_row1, "Long", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 1, conf_row1, conf_bias_bull ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_bias_bull))
+    table.cell(bias_tbl, 2, conf_row1, conf_in_discount ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_in_discount))
+    table.cell(bias_tbl, 3, conf_row1, conf_swept_low ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_swept_low))
+    table.cell(bias_tbl, 4, conf_row1, conf_fvg_bull ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_fvg_bull))
+    table.cell(bias_tbl, 5, conf_row1, conf_bos_bull ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_bos_bull))
+    table.cell(bias_tbl, 6, conf_row1, ses_on ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(ses_on))
+    table.cell(bias_tbl, 7, conf_row1, str.tostring(conf_score_long) + "/6", text_color=color.white, text_size=size.normal, bgcolor=conf_long_ok ? COLOR_BULL : COLOR_NEUTRAL)
+
+    // Short row
+    conf_short_ok = conf_score_short >= conf_min_score
+    table.cell(bias_tbl, 0, conf_row2, "Short", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(bias_tbl, 1, conf_row2, conf_bias_bear ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_bias_bear))
+    table.cell(bias_tbl, 2, conf_row2, conf_in_premium ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_in_premium))
+    table.cell(bias_tbl, 3, conf_row2, conf_swept_high ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_swept_high))
+    table.cell(bias_tbl, 4, conf_row2, conf_fvg_bear ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_fvg_bear))
+    table.cell(bias_tbl, 5, conf_row2, conf_bos_bear ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_bos_bear))
+    table.cell(bias_tbl, 6, conf_row2, ses_on ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(ses_on))
+    table.cell(bias_tbl, 7, conf_row2, str.tostring(conf_score_short) + "/6", text_color=color.white, text_size=size.normal, bgcolor=conf_short_ok ? COLOR_BEAR : COLOR_NEUTRAL)
+
+// --- Confluence Alerts ---
+conf_long_ready  = conf_score_long >= conf_min_score and conf_score_long[1] < conf_min_score
+conf_short_ready = conf_score_short >= conf_min_score and conf_score_short[1] < conf_min_score
+
+// --- FVG break edge detection (uses shared FVG state) ---
+alert_fvg_bull_break = fvg_is_bull_broken and not fvg_is_bull_broken[1]
+alert_fvg_bear_break = fvg_is_bear_broken and not fvg_is_bear_broken[1]
+
+// ============================================================================
+//                    MODULE: ENTRY / EXIT DETECTION
+// ============================================================================
+// Detects pullback to FVG or equilibrium and calculates SL/TP levels.
+// This module provides the data for Step 4 (ENTER) and Step 5 (MANAGE).
+
+// --- Settings ---
+
+entry_rr_ratio = input.float(3.0, "Risk:Reward Ratio", minval=1.0, maxval=10.0, step=0.5, group="Entry / Exit", tooltip="TP distance as multiple of SL distance")
+entry_sl_buffer_atr = input.float(0.5, "SL Buffer (ATR mult)", minval=0.1, maxval=2.0, step=0.1, group="Entry / Exit", tooltip="Buffer added below/above swept level for SL")
+
+// --- Variables ---
+
+var float entry_price = na
+var float entry_sl    = na
+var float entry_tp    = na
+var int   entry_dir   = 0      // 1 = long, -1 = short
+var bool  entry_valid = false
+
+// --- Pullback Detection (uses shared FVG state - no duplicate loops) ---
+
+// Pullback to bullish FVG: price dips into the gap zone
+entry_pullback_long_fvg = fvg_has_active_bull and low <= fvg_active_bull_top and close > fvg_active_bull_btm
+
+// Pullback to bearish FVG: price rises into the gap zone
+entry_pullback_short_fvg = fvg_has_active_bear and high >= fvg_active_bear_btm and close < fvg_active_bear_top
+
+// Pullback to equilibrium (50% of swing range)
+entry_pullback_long_eq  = close <= conf_equilibrium and close[1] > conf_equilibrium
+entry_pullback_short_eq = close >= conf_equilibrium and close[1] < conf_equilibrium
+
+// Combined pullback detection
+entry_pullback_long  = entry_pullback_long_fvg or entry_pullback_long_eq
+entry_pullback_short = entry_pullback_short_fvg or entry_pullback_short_eq
+
+// --- Entry Signal: Confluence ready + Pullback detected ---
+
+entry_atr = ta.atr(ATR_PERIOD_PATTERN)
+
+entry_signal_long  = conf_score_long >= conf_min_score and entry_pullback_long
+entry_signal_short = conf_score_short >= conf_min_score and entry_pullback_short
+
+// Calculate entry/SL/TP on signal
+if entry_signal_long and not entry_signal_long[1]
+    entry_dir   := 1
+    entry_price := close
+    entry_sl    := (not na(liq_pl_btm) ? liq_pl_btm : smc_trail.bottom) - entry_atr * entry_sl_buffer_atr
+    sl_dist     = entry_price - entry_sl
+    entry_tp    := entry_price + sl_dist * entry_rr_ratio
+    entry_valid := sl_dist > 0
+
+if entry_signal_short and not entry_signal_short[1]
+    entry_dir   := -1
+    entry_price := close
+    entry_sl    := (not na(liq_ph_top) ? liq_ph_top : smc_trail.top) + entry_atr * entry_sl_buffer_atr
+    sl_dist     = entry_sl - entry_price
+    entry_tp    := entry_price - sl_dist * entry_rr_ratio
+    entry_valid := sl_dist > 0
+
+// ============================================================================
+//                              ALERTS
+// ============================================================================
+// Edge booleans: alert_sweep_high/low, alert_choch_bull/bear, alert_fvg_*_break
+// are computed earlier in their respective modules and reused here.
+
+// --- alertcondition() calls (static alerts for TradingView alert manager) ---
+alertcondition(alert_sweep_high,  "Sweep High",   "Liquidity sweep: swing high crossed")
+alertcondition(alert_sweep_low,   "Sweep Low",    "Liquidity sweep: swing low crossed")
+alertcondition(alert_choch_bull,  "ChoCH Bullish", "Change of Character: bearish to bullish")
+alertcondition(alert_choch_bear,  "ChoCH Bearish", "Change of Character: bullish to bearish")
+alertcondition(conf_long_ready,      "Setup Long",      "Confluence score reached threshold - LONG setup ready")
+alertcondition(conf_short_ready,     "Setup Short",     "Confluence score reached threshold - SHORT setup ready")
+alertcondition(alert_fvg_bull_break, "FVG Bull Broken", "Bullish FVG broken - price closed below gap")
+alertcondition(alert_fvg_bear_break, "FVG Bear Broken", "Bearish FVG broken - price closed above gap")
+
+// --- alert() calls with JSON payload (for webhook consumption) ---
+// These fire with structured data that external systems (MCP server, bot) can parse
+
+if entry_signal_long and not entry_signal_long[1] and entry_valid
+    json_long = '{"signal":"entry","dir":"long"' + ',"entry":' + str.tostring(entry_price) + ',"sl":' + str.tostring(entry_sl) + ',"tp":' + str.tostring(entry_tp) + ',"score":' + str.tostring(conf_score_long) + ',"rr":' + str.tostring(entry_rr_ratio) + ',"ticker":"' + syminfo.ticker + '","tf":"' + timeframe.period + '"}'
+    alert(json_long, alert.freq_once_per_bar)
+
+if entry_signal_short and not entry_signal_short[1] and entry_valid
+    json_short = '{"signal":"entry","dir":"short"' + ',"entry":' + str.tostring(entry_price) + ',"sl":' + str.tostring(entry_sl) + ',"tp":' + str.tostring(entry_tp) + ',"score":' + str.tostring(conf_score_short) + ',"rr":' + str.tostring(entry_rr_ratio) + ',"ticker":"' + syminfo.ticker + '","tf":"' + timeframe.period + '"}'
+    alert(json_short, alert.freq_once_per_bar)
