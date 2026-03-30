@@ -21,8 +21,7 @@ show_choch_bos        = input.bool(false, "ChoCH / BOS", group="Module Toggles")
 show_fvg              = input.bool(true, "Fair Value Gaps (FVG)", group="Module Toggles")
 show_liq              = input.bool(true, "Liquidity Swings", group="Module Toggles")
 show_candle_patterns  = input.bool(true, "Candlestick Patterns", group="Module Toggles")
-show_bias_table       = input.bool(true, "MTF Bias Table", group="Module Toggles")
-show_confluence       = input.bool(true, "Confluence Scorer", group="Module Toggles")
+show_confluence_table = input.bool(true, "Confluence Table", group="Module Toggles")
 
 // ============================================================================
 //                        SHARED CONSTANTS
@@ -984,6 +983,10 @@ for i = 0 to math.min(FVG_BREAK_LOOKBACK, ict_bFVG_DN.size() - 1)
         if high > bxi.bx.get_top()
             fvg_is_bear_broken := true
 
+// --- FVG break edge detection (used by alerts) ---
+alert_fvg_bull_break = fvg_is_bull_broken and not fvg_is_bull_broken[1]
+alert_fvg_bear_break = fvg_is_bear_broken and not fvg_is_bear_broken[1]
+
 // ============================================================================
 //                     MODULE: LIQUIDITY SWINGS
 // ============================================================================
@@ -1128,6 +1131,10 @@ if show_liq
     liq_set_level(not na(liq_pl), liq_pl_crossed, liq_pl_btm, liq_pl_count, liq_btmCss)
     liq_set_label(liq_pl_count, liq_pl_vol, liq_pl_x1, liq_pl_btm, liq_btmCss, label.style_label_up)
 
+// --- Sweep edge booleans (used by alerts) ---
+alert_sweep_high = liq_ph_crossed and not liq_ph_crossed[1]
+alert_sweep_low  = liq_pl_crossed and not liq_pl_crossed[1]
+
 // ============================================================================
 //                      MODULE: CANDLESTICK CHANNELS
 // ============================================================================
@@ -1237,7 +1244,6 @@ if cp_bm and cp_show_bm
 
 // --- Settings ---
 
-bias_position  = input.string("Top Right", "Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="MTF Bias Table")
 // --- CHoCH detection (Pivot approach, same as chart module) ---
 // Pivot length 1. Close crossing swing high = bullish, swing low = bearish.
 
@@ -1280,263 +1286,13 @@ bias_ema() =>
 bias_combined() =>
     [bias_choch(), bias_ema()]
 
-[bias_1m,  ema_1m]  = request.security(syminfo.tickerid, "1",   bias_combined())
-[bias_5m,  ema_5m]  = request.security(syminfo.tickerid, "5",   bias_combined())
-[bias_15m, ema_15m] = request.security(syminfo.tickerid, "15",  bias_combined())
 [bias_1h,  ema_1h]  = request.security(syminfo.tickerid, "60",  bias_combined())
 [bias_4h,  ema_4h]  = request.security(syminfo.tickerid, "240", bias_combined())
 [bias_d,   ema_d]   = request.security(syminfo.tickerid, "D",   bias_combined())
 [bias_w,   ema_w]   = request.security(syminfo.tickerid, "W",   bias_combined())
 
-// --- Table ---
-
-bias_pos = switch bias_position
-    "Top Right"    => position.top_right
-    "Top Left"     => position.top_left
-    "Bottom Right" => position.bottom_right
-    "Bottom Left"  => position.bottom_left
-
 bias_color(int b) => b == 1 ? COLOR_BULL : b == -1 ? COLOR_BEAR : COLOR_NEUTRAL
 
-choch_tip(string tf, int b) =>
-    b == 1 ? tf + ": Close broke above swing high → Bullish CHoCH" : b == -1 ? tf + ": Close broke below swing low → Bearish CHoCH" : tf + ": No change of character detected"
-
-ema_tip(string tf, int b) =>
-    b == 1 ? tf + ": EMA 50 above EMA 100 & 200 → Bullish alignment" : b == -1 ? tf + ": EMA 50 below EMA 100 & 200 → Bearish alignment" : tf + ": EMAs mixed - no clear alignment"
-
-var table bias_tbl = table.new(bias_pos, 8, 6, border_width=1)
-
-if show_bias_table and barstate.islast
-
-    // Header row
-    table.cell(bias_tbl, 0, 0, "",     text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 1, 0, "1m",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 2, 0, "5m",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 3, 0, "15m",  text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 4, 0, "1H",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 5, 0, "4H",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 6, 0, "D",    text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 7, 0, "W",    text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-
-    // CHoCH row
-    table.cell(bias_tbl, 0, 1, "CHoCH",  text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip="CHoCH - close breaking above swing high (bullish) or below swing low (bearish) on individual candles")
-    table.cell(bias_tbl, 1, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_1m),  tooltip=choch_tip("1m",  bias_1m))
-    table.cell(bias_tbl, 2, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_5m),  tooltip=choch_tip("5m",  bias_5m))
-    table.cell(bias_tbl, 3, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_15m), tooltip=choch_tip("15m", bias_15m))
-    table.cell(bias_tbl, 4, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_1h),  tooltip=choch_tip("1H",  bias_1h))
-    table.cell(bias_tbl, 5, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_4h),  tooltip=choch_tip("4H",  bias_4h))
-    table.cell(bias_tbl, 6, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_d),   tooltip=choch_tip("D",   bias_d))
-    table.cell(bias_tbl, 7, 1, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(bias_w),   tooltip=choch_tip("W",   bias_w))
-
-    // EMA row
-    table.cell(bias_tbl, 0, 2, "EMA",  text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip="EMA alignment - EMA 50 position relative to EMA 100 & 200")
-    table.cell(bias_tbl, 1, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_1m),  tooltip=ema_tip("1m",  ema_1m))
-    table.cell(bias_tbl, 2, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_5m),  tooltip=ema_tip("5m",  ema_5m))
-    table.cell(bias_tbl, 3, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_15m), tooltip=ema_tip("15m", ema_15m))
-    table.cell(bias_tbl, 4, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_1h),  tooltip=ema_tip("1H",  ema_1h))
-    table.cell(bias_tbl, 5, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_4h),  tooltip=ema_tip("4H",  ema_4h))
-    table.cell(bias_tbl, 6, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_d),   tooltip=ema_tip("D",   ema_d))
-    table.cell(bias_tbl, 7, 2, "●",    text_color=color.white, text_size=size.small, bgcolor=bias_color(ema_w),   tooltip=ema_tip("W",   ema_w))
-
-
-// ============================================================================
-//                     MODULE: CONFLUENCE SCORER
-// ============================================================================
-// Event-based scoring with bar expiry. Expiry auto-scales with timeframe so
-// "20 bars" means ~1.5 hours on 5m but ~20 days on Daily.
-
-// --- Settings ---
-
-conf_min_score     = input.int(4, "Min Score", minval=1, maxval=6, group="Confluence Scorer", tooltip="Minimum confluence score to qualify a trade setup (0-6)")
-conf_sweep_expiry  = input.int(20, "Sweep Expiry (bars)", minval=5, maxval=100, group="Confluence Scorer", tooltip="How many bars a sweep event stays valid. Auto-scales: 20 bars on 5m = ~1.5h, on 1H = ~1 day")
-conf_bos_expiry    = input.int(15, "BOS Expiry (bars)", minval=5, maxval=100, group="Confluence Scorer", tooltip="How many bars a BOS/ChoCH event stays valid")
-
-// --- Variables ---
-
-var int conf_sweep_high_bar = na
-var int conf_sweep_low_bar  = na
-var int conf_bos_bull_bar   = na
-var int conf_bos_bear_bar   = na
-
-// --- Shared edge booleans (computed once in their modules, reused here) ---
-// alert_sweep_high/low defined in Alerts section; computed here early for scorer
-alert_sweep_high = liq_ph_crossed and not liq_ph_crossed[1]
-alert_sweep_low  = liq_pl_crossed and not liq_pl_crossed[1]
-
-// --- Track event bars ---
-
-if alert_sweep_high
-    conf_sweep_high_bar := bar_index
-
-if alert_sweep_low
-    conf_sweep_low_bar := bar_index
-
-if alert_choch_bull
-    conf_bos_bull_bar := bar_index
-
-if alert_choch_bear
-    conf_bos_bear_bar := bar_index
-
-// --- Factor 1: Bias Aligned ---
-// Uses HTF bias data relative to chart timeframe. On lower TFs, checks higher
-// TFs for alignment. On higher TFs, uses what's available above.
-// Rule: need 2+ of the available HTF biases to agree.
-
-conf_bias_bull = false
-conf_bias_bear = false
-
-if timeframe.in_seconds() <= timeframe.in_seconds("15")
-    // Scalp/intraday: check 1H, 4H, D (3 levels above)
-    conf_bias_bull := (bias_1h == 1 ? 1 : 0) + (bias_4h == 1 ? 1 : 0) + (bias_d == 1 ? 1 : 0) >= 2
-    conf_bias_bear := (bias_1h == -1 ? 1 : 0) + (bias_4h == -1 ? 1 : 0) + (bias_d == -1 ? 1 : 0) >= 2
-else if timeframe.in_seconds() <= timeframe.in_seconds("60")
-    // 1H chart: check 4H, D, W
-    conf_bias_bull := (bias_4h == 1 ? 1 : 0) + (bias_d == 1 ? 1 : 0) + (bias_w == 1 ? 1 : 0) >= 2
-    conf_bias_bear := (bias_4h == -1 ? 1 : 0) + (bias_d == -1 ? 1 : 0) + (bias_w == -1 ? 1 : 0) >= 2
-else if timeframe.in_seconds() <= timeframe.in_seconds("240")
-    // 4H chart: check D, W
-    conf_bias_bull := bias_d == 1 and bias_w == 1
-    conf_bias_bear := bias_d == -1 and bias_w == -1
-else
-    // Daily+: check W only
-    conf_bias_bull := bias_w == 1
-    conf_bias_bear := bias_w == -1
-
-// --- Factor 2: Premium/Discount Zone ---
-conf_equilibrium = math.avg(smc_trail.top, smc_trail.bottom)
-conf_in_discount = not na(smc_trail.top) and not na(smc_trail.bottom) and close < conf_equilibrium
-conf_in_premium  = not na(smc_trail.top) and not na(smc_trail.bottom) and close > conf_equilibrium
-
-// --- Factor 3: Liquidity Swept (with bar-based expiry) ---
-conf_swept_high = not na(conf_sweep_high_bar) and (bar_index - conf_sweep_high_bar) <= conf_sweep_expiry
-conf_swept_low  = not na(conf_sweep_low_bar) and (bar_index - conf_sweep_low_bar) <= conf_sweep_expiry
-
-// --- Factor 4: FVG Present (uses shared FVG state computed after FVG module) ---
-conf_fvg_bull = fvg_has_active_bull
-conf_fvg_bear = fvg_has_active_bear
-
-// --- Factor 5: BOS/ChoCH Confirmed (with bar-based expiry) ---
-conf_bos_bull = not na(conf_bos_bull_bar) and (bar_index - conf_bos_bull_bar) <= conf_bos_expiry
-conf_bos_bear = not na(conf_bos_bear_bar) and (bar_index - conf_bos_bear_bar) <= conf_bos_expiry
-
-// --- Factor 6: Session Active (only relevant for intraday) ---
-conf_session_active = timeframe.isintraday and (ses_is_ny or ses_is_ldn)
-// On daily+ TFs, session is always "true" (each bar spans full sessions)
-conf_session_score = timeframe.isintraday ? (conf_session_active ? 1 : 0) : 1
-
-// --- Calculate Scores ---
-conf_score_long  = (conf_bias_bull ? 1 : 0) + (conf_in_discount ? 1 : 0) + (conf_swept_low ? 1 : 0) + (conf_fvg_bull ? 1 : 0) + (conf_bos_bull ? 1 : 0) + conf_session_score
-conf_score_short = (conf_bias_bear ? 1 : 0) + (conf_in_premium ? 1 : 0) + (conf_swept_high ? 1 : 0) + (conf_fvg_bear ? 1 : 0) + (conf_bos_bear ? 1 : 0) + conf_session_score
-
-// --- Display: Confluence rows appended to bias table (rows 3-5) ---
-
-conf_factor_color(bool active) => active ? COLOR_BULL : COLOR_NEUTRAL
-
-// Confluence rows start at row 3 (right after EMA row 2)
-if show_confluence and barstate.islast
-    conf_row0 = show_bias_table ? 3 : 0
-    conf_row1 = conf_row0 + 1
-    conf_row2 = conf_row0 + 2
-
-    // Header: factor names
-    table.cell(bias_tbl, 0, conf_row0, "", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 1, conf_row0, "Bias", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 2, conf_row0, "Zone", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 3, conf_row0, "Sweep", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 4, conf_row0, "FVG", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 5, conf_row0, "BOS", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 6, conf_row0, "Ses", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 7, conf_row0, "Score", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-
-    // Long row
-    conf_long_ok = conf_score_long >= conf_min_score
-    ses_on = conf_session_score == 1
-    table.cell(bias_tbl, 0, conf_row1, "Long", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 1, conf_row1, conf_bias_bull ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_bias_bull))
-    table.cell(bias_tbl, 2, conf_row1, conf_in_discount ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_in_discount))
-    table.cell(bias_tbl, 3, conf_row1, conf_swept_low ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_swept_low))
-    table.cell(bias_tbl, 4, conf_row1, conf_fvg_bull ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_fvg_bull))
-    table.cell(bias_tbl, 5, conf_row1, conf_bos_bull ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_bos_bull))
-    table.cell(bias_tbl, 6, conf_row1, ses_on ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(ses_on))
-    table.cell(bias_tbl, 7, conf_row1, str.tostring(conf_score_long) + "/6", text_color=color.white, text_size=size.normal, bgcolor=conf_long_ok ? COLOR_BULL : COLOR_NEUTRAL)
-
-    // Short row
-    conf_short_ok = conf_score_short >= conf_min_score
-    table.cell(bias_tbl, 0, conf_row2, "Short", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(bias_tbl, 1, conf_row2, conf_bias_bear ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_bias_bear))
-    table.cell(bias_tbl, 2, conf_row2, conf_in_premium ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_in_premium))
-    table.cell(bias_tbl, 3, conf_row2, conf_swept_high ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_swept_high))
-    table.cell(bias_tbl, 4, conf_row2, conf_fvg_bear ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_fvg_bear))
-    table.cell(bias_tbl, 5, conf_row2, conf_bos_bear ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(conf_bos_bear))
-    table.cell(bias_tbl, 6, conf_row2, ses_on ? "+" : "-", text_color=color.white, text_size=size.small, bgcolor=conf_factor_color(ses_on))
-    table.cell(bias_tbl, 7, conf_row2, str.tostring(conf_score_short) + "/6", text_color=color.white, text_size=size.normal, bgcolor=conf_short_ok ? COLOR_BEAR : COLOR_NEUTRAL)
-
-// --- Confluence Alerts ---
-conf_long_ready  = conf_score_long >= conf_min_score and conf_score_long[1] < conf_min_score
-conf_short_ready = conf_score_short >= conf_min_score and conf_score_short[1] < conf_min_score
-
-// --- FVG break edge detection (uses shared FVG state) ---
-alert_fvg_bull_break = fvg_is_bull_broken and not fvg_is_bull_broken[1]
-alert_fvg_bear_break = fvg_is_bear_broken and not fvg_is_bear_broken[1]
-
-// ============================================================================
-//                    MODULE: ENTRY / EXIT DETECTION
-// ============================================================================
-// Detects pullback to FVG or equilibrium and calculates SL/TP levels.
-// This module provides the data for Step 4 (ENTER) and Step 5 (MANAGE).
-
-// --- Settings ---
-
-entry_rr_ratio = input.float(3.0, "Risk:Reward Ratio", minval=1.0, maxval=10.0, step=0.5, group="Entry / Exit", tooltip="TP distance as multiple of SL distance")
-entry_sl_buffer_atr = input.float(0.5, "SL Buffer (ATR mult)", minval=0.1, maxval=2.0, step=0.1, group="Entry / Exit", tooltip="Buffer added below/above swept level for SL")
-
-// --- Variables ---
-
-var float entry_price = na
-var float entry_sl    = na
-var float entry_tp    = na
-var int   entry_dir   = 0      // 1 = long, -1 = short
-var bool  entry_valid = false
-
-// --- Pullback Detection (uses shared FVG state - no duplicate loops) ---
-
-// Pullback to bullish FVG: price dips into the gap zone
-entry_pullback_long_fvg = fvg_has_active_bull and low <= fvg_active_bull_top and close > fvg_active_bull_btm
-
-// Pullback to bearish FVG: price rises into the gap zone
-entry_pullback_short_fvg = fvg_has_active_bear and high >= fvg_active_bear_btm and close < fvg_active_bear_top
-
-// Pullback to equilibrium (50% of swing range)
-entry_pullback_long_eq  = close <= conf_equilibrium and close[1] > conf_equilibrium
-entry_pullback_short_eq = close >= conf_equilibrium and close[1] < conf_equilibrium
-
-// Combined pullback detection
-entry_pullback_long  = entry_pullback_long_fvg or entry_pullback_long_eq
-entry_pullback_short = entry_pullback_short_fvg or entry_pullback_short_eq
-
-// --- Entry Signal: Confluence ready + Pullback detected ---
-
-entry_atr = ta.atr(ATR_PERIOD_PATTERN)
-
-entry_signal_long  = conf_score_long >= conf_min_score and entry_pullback_long
-entry_signal_short = conf_score_short >= conf_min_score and entry_pullback_short
-
-// Calculate entry/SL/TP on signal
-if entry_signal_long and not entry_signal_long[1]
-    entry_dir   := 1
-    entry_price := close
-    entry_sl    := (not na(liq_pl_btm) ? liq_pl_btm : smc_trail.bottom) - entry_atr * entry_sl_buffer_atr
-    sl_dist     = entry_price - entry_sl
-    entry_tp    := entry_price + sl_dist * entry_rr_ratio
-    entry_valid := sl_dist > 0
-
-if entry_signal_short and not entry_signal_short[1]
-    entry_dir   := -1
-    entry_price := close
-    entry_sl    := (not na(liq_ph_top) ? liq_ph_top : smc_trail.top) + entry_atr * entry_sl_buffer_atr
-    sl_dist     = entry_sl - entry_price
-    entry_tp    := entry_price - sl_dist * entry_rr_ratio
-    entry_valid := sl_dist > 0
 
 // ============================================================================
 //                              ALERTS
@@ -1549,18 +1305,5 @@ alertcondition(alert_sweep_high,  "Sweep High",   "Liquidity sweep: swing high c
 alertcondition(alert_sweep_low,   "Sweep Low",    "Liquidity sweep: swing low crossed")
 alertcondition(alert_choch_bull,  "ChoCH Bullish", "Change of Character: bearish to bullish")
 alertcondition(alert_choch_bear,  "ChoCH Bearish", "Change of Character: bullish to bearish")
-alertcondition(conf_long_ready,      "Setup Long",      "Confluence score reached threshold - LONG setup ready")
-alertcondition(conf_short_ready,     "Setup Short",     "Confluence score reached threshold - SHORT setup ready")
 alertcondition(alert_fvg_bull_break, "FVG Bull Broken", "Bullish FVG broken - price closed below gap")
 alertcondition(alert_fvg_bear_break, "FVG Bear Broken", "Bearish FVG broken - price closed above gap")
-
-// --- alert() calls with JSON payload (for webhook consumption) ---
-// These fire with structured data that external systems (MCP server, bot) can parse
-
-if entry_signal_long and not entry_signal_long[1] and entry_valid
-    json_long = '{"signal":"entry","dir":"long"' + ',"entry":' + str.tostring(entry_price) + ',"sl":' + str.tostring(entry_sl) + ',"tp":' + str.tostring(entry_tp) + ',"score":' + str.tostring(conf_score_long) + ',"rr":' + str.tostring(entry_rr_ratio) + ',"ticker":"' + syminfo.ticker + '","tf":"' + timeframe.period + '"}'
-    alert(json_long, alert.freq_once_per_bar)
-
-if entry_signal_short and not entry_signal_short[1] and entry_valid
-    json_short = '{"signal":"entry","dir":"short"' + ',"entry":' + str.tostring(entry_price) + ',"sl":' + str.tostring(entry_sl) + ',"tp":' + str.tostring(entry_tp) + ',"score":' + str.tostring(conf_score_short) + ',"rr":' + str.tostring(entry_rr_ratio) + ',"ticker":"' + syminfo.ticker + '","tf":"' + timeframe.period + '"}'
-    alert(json_short, alert.freq_once_per_bar)
