@@ -48,7 +48,7 @@ class TestRunBacktest:
     def test_custom_config(self, sample_ohlcv):
         config = StrategyConfig(min_score=2, rr_ratio=2.0)
         trades_loose = run_backtest(sample_ohlcv, config)
-        config_strict = StrategyConfig(min_score=6, rr_ratio=3.0)
+        config_strict = StrategyConfig(min_score=9, rr_ratio=3.0)
         trades_strict = run_backtest(sample_ohlcv, config_strict)
         # Looser min_score should produce >= trades than strict
         assert len(trades_loose) >= len(trades_strict)
@@ -61,7 +61,7 @@ class TestRunBacktest:
             assert t.exit_reason in ("SL", "TP")
 
     def test_flat_market_few_trades(self, flat_ohlcv):
-        config = StrategyConfig(min_score=5)
+        config = StrategyConfig(min_score=8)
         trades = run_backtest(flat_ohlcv, config)
         # Flat market with high threshold should produce very few trades
         assert len(trades) < 20

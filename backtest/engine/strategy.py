@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .indicators import atr, choch_bos, detect_fvg, liquidity_swings, smc_swing_zones, swing_length_for_tf
+from .indicators import atr, choch_bos, compute_ema_alignment, liquidity_swings, smc_swing_zones, swing_length_for_tf
 
 
 @dataclass
@@ -30,9 +30,7 @@ class StrategyConfig:
     rr_ratio: float = 3.0
     sl_buffer_atr: float = 0.5
     atr_period: int = 20
-    min_score: int = 4
-    sweep_expiry: int = 20
-    bos_expiry: int = 15
+    min_score: int = 6
     max_daily_losses: int = 3
     commission_pct: float = 0.1
     slippage_pct: float = 0.05
@@ -43,93 +41,50 @@ class StrategyConfig:
 def compute_confluence(
     df: pd.DataFrame,
     config: StrategyConfig,
-    htf_bias: pd.Series,
-    sweep_high: pd.Series,
-    sweep_low: pd.Series,
-    choch: pd.Series,
-    fvg_up: list,
-    fvg_dn: list,
-    trail_top: pd.Series,
-    trail_btm: pd.Series,
-) -> tuple[pd.Series, pd.Series]:
-    """Compute confluence scores for long and short on every bar."""
-    n = len(df)
-    score_long = pd.Series(0, index=df.index, dtype=int)
-    score_short = pd.Series(0, index=df.index, dtype=int)
+    choch_w: pd.Series,
+    choch_d: pd.Series,
+    choch_4h: pd.Series,
+    choch_1h: pd.Series,
+    ema_w: pd.Series,
+    ema_d: pd.Series,
+    ema_4h: pd.Series,
+    ema_1h: pd.Series,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Compute 9-factor confluence: CHoCH + EMA on W/D/4H/1H + session.
+    Returns (score, direction, session_score) series.
+    """
+    bull_count = (
+        (choch_w == 1).astype(int)
+        + (choch_d == 1).astype(int)
+        + (choch_4h == 1).astype(int)
+        + (choch_1h == 1).astype(int)
+        + (ema_w == 1).astype(int)
+        + (ema_d == 1).astype(int)
+        + (ema_4h == 1).astype(int)
+        + (ema_1h == 1).astype(int)
+    )
+    bear_count = (
+        (choch_w == -1).astype(int)
+        + (choch_d == -1).astype(int)
+        + (choch_4h == -1).astype(int)
+        + (choch_1h == -1).astype(int)
+        + (ema_w == -1).astype(int)
+        + (ema_d == -1).astype(int)
+        + (ema_4h == -1).astype(int)
+        + (ema_1h == -1).astype(int)
+    )
 
-    last_sweep_high_bar = -999
-    last_sweep_low_bar = -999
-    last_bos_bull_bar = -999
-    last_bos_bear_bar = -999
+    session = pd.Series(1, index=df.index, dtype=int)
 
-    # Precompute active FVG state per bar
-    fvg_bull_active = pd.Series(False, index=df.index)
-    fvg_bear_active = pd.Series(False, index=df.index)
+    direction = pd.Series(0, index=df.index, dtype=int)
+    direction[bull_count > bear_count] = 1
+    direction[bear_count > bull_count] = -1
 
-    # Track FVG lifecycle
-    active_up = []
-    active_dn = []
-    fvg_up_idx = 0
-    fvg_dn_idx = 0
+    score = pd.Series(0, index=df.index, dtype=int)
+    score[direction == 1] = bull_count[direction == 1] + session[direction == 1]
+    score[direction == -1] = bear_count[direction == -1] + session[direction == -1]
 
-    for i in range(n):
-        # Add new FVGs that appeared at this bar
-        while fvg_up_idx < len(fvg_up) and fvg_up[fvg_up_idx]["bar"] <= i:
-            active_up.append(fvg_up[fvg_up_idx])
-            fvg_up_idx += 1
-        while fvg_dn_idx < len(fvg_dn) and fvg_dn[fvg_dn_idx]["bar"] <= i:
-            active_dn.append(fvg_dn[fvg_dn_idx])
-            fvg_dn_idx += 1
-
-        # Break FVGs
-        for f in active_up:
-            if f["active"] and df["low"].iloc[i] < f["bottom"]:
-                f["active"] = False
-        for f in active_dn:
-            if f["active"] and df["high"].iloc[i] > f["top"]:
-                f["active"] = False
-
-        fvg_bull_active.iloc[i] = any(f["active"] for f in active_up[-10:]) if active_up else False
-        fvg_bear_active.iloc[i] = any(f["active"] for f in active_dn[-10:]) if active_dn else False
-
-        # Track event bars
-        if sweep_high.iloc[i]:
-            last_sweep_high_bar = i
-        if sweep_low.iloc[i]:
-            last_sweep_low_bar = i
-        if i > 0 and choch.iloc[i] == 1 and choch.iloc[i - 1] != 1:
-            last_bos_bull_bar = i
-        if i > 0 and choch.iloc[i] == -1 and choch.iloc[i - 1] != -1:
-            last_bos_bear_bar = i
-
-        # Factor 1: Bias (simplified - use HTF choch)
-        f1_bull = int(htf_bias.iloc[i] == 1) if not np.isnan(htf_bias.iloc[i]) else 0
-        f1_bear = int(htf_bias.iloc[i] == -1) if not np.isnan(htf_bias.iloc[i]) else 0
-
-        # Factor 2: Zone
-        eq = (trail_top.iloc[i] + trail_btm.iloc[i]) / 2 if not np.isnan(trail_top.iloc[i]) else np.nan
-        f2_bull = int(not np.isnan(eq) and df["close"].iloc[i] < eq)
-        f2_bear = int(not np.isnan(eq) and df["close"].iloc[i] > eq)
-
-        # Factor 3: Sweep (with expiry)
-        f3_bull = int((i - last_sweep_low_bar) <= config.sweep_expiry)
-        f3_bear = int((i - last_sweep_high_bar) <= config.sweep_expiry)
-
-        # Factor 4: FVG
-        f4_bull = int(fvg_bull_active.iloc[i])
-        f4_bear = int(fvg_bear_active.iloc[i])
-
-        # Factor 5: BOS (with expiry)
-        f5_bull = int((i - last_bos_bull_bar) <= config.bos_expiry)
-        f5_bear = int((i - last_bos_bear_bar) <= config.bos_expiry)
-
-        # Factor 6: Session (always 1 for backtesting simplicity)
-        f6 = 1
-
-        score_long.iloc[i] = f1_bull + f2_bull + f3_bull + f4_bull + f5_bull + f6
-        score_short.iloc[i] = f1_bear + f2_bear + f3_bear + f4_bear + f5_bear + f6
-
-    return score_long, score_short
+    return score, direction, session
 
 
 def run_backtest(df: pd.DataFrame, config: StrategyConfig = StrategyConfig()) -> list[Trade]:
@@ -142,22 +97,27 @@ def run_backtest(df: pd.DataFrame, config: StrategyConfig = StrategyConfig()) ->
 
     # Compute all indicators
     choch = choch_bos(df, pivot_length=1)
-    fvg_up, fvg_dn = detect_fvg(df)
-    liq_ph_top, liq_pl_btm, sweep_high, sweep_low = liquidity_swings(df, config.liq_swing_length)
+    liq_ph_top, liq_pl_btm, _, _ = liquidity_swings(df, config.liq_swing_length)
     trail_top, trail_btm = smc_swing_zones(df, swing_len)
 
-    # HTF bias (use choch from same TF as proxy - in production, use actual HTF data)
-    htf_bias = choch
+    # EMA alignment
+    ema_align = compute_ema_alignment(df)
 
-    # Confluence
-    score_long, score_short = compute_confluence(
-        df, config, htf_bias, sweep_high, sweep_low, choch, fvg_up, fvg_dn, trail_top, trail_btm
+    # Confluence (single TF proxy — in production, pass actual HTF series)
+    choch_1h = choch
+    score, direction, _ = compute_confluence(
+        df,
+        config,
+        choch_w=choch_1h,
+        choch_d=choch_1h,
+        choch_4h=choch_1h,
+        choch_1h=choch_1h,
+        ema_w=ema_align,
+        ema_d=ema_align,
+        ema_4h=ema_align,
+        ema_1h=ema_align,
     )
 
-    # Equilibrium
-    equilibrium = (trail_top + trail_btm) / 2
-
-    # Pullback detection
     n = len(df)
     trades: list[Trade] = []
     in_trade = False
@@ -214,13 +174,12 @@ def run_backtest(df: pd.DataFrame, config: StrategyConfig = StrategyConfig()) ->
             continue
 
         # Check entry conditions
-        eq = equilibrium.iloc[i]
         atr_val = entry_atr.iloc[i]
-        if np.isnan(atr_val) or np.isnan(eq):
+        if np.isnan(atr_val):
             continue
 
         # Long entry
-        if score_long.iloc[i] >= config.min_score and score_long.iloc[i - 1] < config.min_score:
+        if score.iloc[i] >= config.min_score and score.iloc[i - 1] < config.min_score and direction.iloc[i] == 1:
             sl = (
                 liq_pl_btm.iloc[i] - atr_val * config.sl_buffer_atr
                 if not np.isnan(liq_pl_btm.iloc[i])
@@ -233,11 +192,11 @@ def run_backtest(df: pd.DataFrame, config: StrategyConfig = StrategyConfig()) ->
             if sl_dist <= 0:
                 continue
             tp = entry + sl_dist * config.rr_ratio
-            current_trade = Trade(bar=i, direction=1, entry_price=entry, sl=sl, tp=tp, score=score_long.iloc[i])
+            current_trade = Trade(bar=i, direction=1, entry_price=entry, sl=sl, tp=tp, score=int(score.iloc[i]))
             in_trade = True
 
         # Short entry
-        elif score_short.iloc[i] >= config.min_score and score_short.iloc[i - 1] < config.min_score:
+        if score.iloc[i] >= config.min_score and score.iloc[i - 1] < config.min_score and direction.iloc[i] == -1:
             sl = (
                 liq_ph_top.iloc[i] + atr_val * config.sl_buffer_atr
                 if not np.isnan(liq_ph_top.iloc[i])
@@ -250,7 +209,7 @@ def run_backtest(df: pd.DataFrame, config: StrategyConfig = StrategyConfig()) ->
             if sl_dist <= 0:
                 continue
             tp = entry - sl_dist * config.rr_ratio
-            current_trade = Trade(bar=i, direction=-1, entry_price=entry, sl=sl, tp=tp, score=score_short.iloc[i])
+            current_trade = Trade(bar=i, direction=-1, entry_price=entry, sl=sl, tp=tp, score=int(score.iloc[i]))
             in_trade = True
 
     return trades
