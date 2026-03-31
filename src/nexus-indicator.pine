@@ -857,10 +857,10 @@ ict_cFVGblBR = input.color(color.new(#22ab94, 50), "Break", group='Fair Value Ga
 ict_cFVGbr   = input.color(color.new(#f7525f, 0), "Bearish FVG ", group='Fair Value Gaps', inline='FVGbr')
 ict_cFVGbrBR = input.color(color.new(#f7525f, 50), "Break", group='Fair Value Gaps', inline='FVGbr')
 
-// Exposed constants
-fvg_body_threshold  = input.float(0.36, "Body Threshold", minval=0.1, maxval=0.8, step=0.01, group="Fair Value Gaps", tooltip="Minimum body-to-range ratio for a candle to qualify as an FVG candle")
-fvg_break_lookback  = input.int(10, "Break Lookback", minval=1, maxval=50, group="Fair Value Gaps", tooltip="Maximum number of FVG boxes to check for break detection each bar")
-fvg_extension_bars  = input.int(8, "Extension Bars", minval=1, maxval=50, group="Fair Value Gaps", tooltip="Number of bars to extend FVG boxes forward from their formation")
+// Constants
+fvg_body_threshold  = 0.36  // Min body-to-range ratio for FVG candle
+fvg_break_lookback  = 10    // Max FVG boxes to check for breaks
+fvg_extension_bars  = 8     // Bars to extend FVG boxes forward
 
 // --- Types ---
 
@@ -997,12 +997,12 @@ alert_fvg_bear_break = fvg_is_bear_broken and not fvg_is_bear_broken[1]
 
 // --- Settings ---
 
-liq_swing_length = input.int(14, "Pivot Length", minval=3, maxval=50, group="Liquidity Swings", tooltip="Lookback bars for detecting swing pivots used as liquidity levels")
+liq_swing_length = input.int(3, "Pivot Length", minval=3, maxval=50, group="Liquidity Swings", tooltip="Lookback bars for detecting swing pivots used as liquidity levels")
 liq_topCss       = input.color(#f7525f, "Swing High", inline="liq_top", group='Liquidity Swings')
 liq_topAreaCss   = input.color(color.new(#f7525f, 50), "Area", inline="liq_top", group='Liquidity Swings')
 liq_btmCss       = input.color(#22ab94, "Swing Low", inline="liq_btm", group='Liquidity Swings')
 liq_btmAreaCss   = input.color(color.new(#22ab94, 50), "Area", inline="liq_btm", group='Liquidity Swings')
-liq_labelSize    = input.string('Tiny', 'Labels Size', options=['Tiny', 'Small', 'Normal'], group='Liquidity Swings', tooltip="Size of labels showing sweep volume")
+liq_labelSize    = 'Tiny'  // Label size for sweep volume labels
 
 // --- Variables ---
 
