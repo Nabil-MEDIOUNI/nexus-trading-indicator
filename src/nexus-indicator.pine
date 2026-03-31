@@ -41,7 +41,7 @@ COLOR_BULL        = #22ab94
 COLOR_BEAR        = #f7525f
 COLOR_NEUTRAL     = #878b94
 COLOR_TRANSPARENT = color.new(color.white, 100)
-COLOR_TABLE_BG    = #2d2d2d
+// COLOR_TABLE_BG deprecated — use chart.bg_color for theme-adaptive backgrounds
 COLOR_DISCOUNT    = #79c1f1
 COLOR_PREMIUM     = #f19579
 
@@ -1399,125 +1399,145 @@ if show_confluence_table and barstate.islast
 
     if conf_show_details
         // === CONFLUENCE SECTION ===
-        // Header
-        table.cell(conf_tbl, 0, row, "",        text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, "CHoCH",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Change of Character - structure direction")
-        table.cell(conf_tbl, 2, row, "EMA",     text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="EMA 50/100/200 alignment")
-        table.cell(conf_tbl, 3, row, "Aligned", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="CHoCH aligns with timeframe above")
-        table.cell(conf_tbl, 4, row, "Score",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        // Header (5-column, keep as-is)
+        table.cell(conf_tbl, 0, row, "",        text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 1, row, "CHoCH",   text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color, tooltip="Change of Character - structure direction")
+        table.cell(conf_tbl, 2, row, "EMA",     text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color, tooltip="EMA 50/100/200 alignment")
+        table.cell(conf_tbl, 3, row, "Aligned", text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color, tooltip="CHoCH aligns with timeframe above")
+        table.cell(conf_tbl, 4, row, "Score",   text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
         row += 1
 
-        // Weekly (max 1: match only)
-        table.cell(conf_tbl, 0, row, "Weekly",  text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, conf_arrow(bias_w), text_color=bias_color(bias_w), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("W", bias_w))
-        table.cell(conf_tbl, 2, row, conf_arrow(ema_w),  text_color=bias_color(ema_w),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("W", ema_w))
-        table.cell(conf_tbl, 3, row, "—",       text_color=COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Weekly has no timeframe above")
-        table.cell(conf_tbl, 4, row, str.tostring(conf_w_score) + "/1", text_color=conf_w_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        // Weekly (max 1: match only) — 5-column data row
+        table.cell(conf_tbl, 0, row, "Weekly",  text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 1, row, conf_arrow(bias_w), text_color=bias_color(bias_w), text_size=conf_size, bgcolor=chart.bg_color, tooltip=choch_tip("W", bias_w))
+        table.cell(conf_tbl, 2, row, conf_arrow(ema_w),  text_color=bias_color(ema_w),  text_size=conf_size, bgcolor=chart.bg_color, tooltip=ema_tip("W", ema_w))
+        table.cell(conf_tbl, 3, row, "—",       text_color=COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color, tooltip="Weekly has no timeframe above")
+        table.cell(conf_tbl, 4, row, str.tostring(conf_w_score) + "/1", text_color=conf_w_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
         row += 1
 
-        // Daily (max 2: match + W→D aligned)
-        table.cell(conf_tbl, 0, row, "Daily",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, conf_arrow(bias_d), text_color=bias_color(bias_d), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("D", bias_d))
-        table.cell(conf_tbl, 2, row, conf_arrow(ema_d),  text_color=bias_color(ema_d),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("D", ema_d))
-        table.cell(conf_tbl, 3, row, conf_wd_aligned ? "✓" : "✗", text_color=conf_wd_aligned ? COLOR_BULL : COLOR_BEAR, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Weekly → Daily CHoCH alignment")
-        table.cell(conf_tbl, 4, row, str.tostring(conf_d_score) + "/2", text_color=conf_d_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        // Daily (max 2: match + W→D aligned) — 5-column data row
+        table.cell(conf_tbl, 0, row, "Daily",   text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 1, row, conf_arrow(bias_d), text_color=bias_color(bias_d), text_size=conf_size, bgcolor=chart.bg_color, tooltip=choch_tip("D", bias_d))
+        table.cell(conf_tbl, 2, row, conf_arrow(ema_d),  text_color=bias_color(ema_d),  text_size=conf_size, bgcolor=chart.bg_color, tooltip=ema_tip("D", ema_d))
+        table.cell(conf_tbl, 3, row, conf_wd_aligned ? "✓" : "✗", text_color=conf_wd_aligned ? COLOR_BULL : COLOR_BEAR, text_size=conf_size, bgcolor=chart.bg_color, tooltip="Weekly → Daily CHoCH alignment")
+        table.cell(conf_tbl, 4, row, str.tostring(conf_d_score) + "/2", text_color=conf_d_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
         row += 1
 
-        // 4H (max 2: match + D→4H aligned)
-        table.cell(conf_tbl, 0, row, "4H",      text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, conf_arrow(bias_4h), text_color=bias_color(bias_4h), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("4H", bias_4h))
-        table.cell(conf_tbl, 2, row, conf_arrow(ema_4h),  text_color=bias_color(ema_4h),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("4H", ema_4h))
-        table.cell(conf_tbl, 3, row, conf_d4h_aligned ? "✓" : "✗", text_color=conf_d4h_aligned ? COLOR_BULL : COLOR_BEAR, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Daily → 4H CHoCH alignment")
-        table.cell(conf_tbl, 4, row, str.tostring(conf_4h_score) + "/2", text_color=conf_4h_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        // 4H (max 2: match + D→4H aligned) — 5-column data row
+        table.cell(conf_tbl, 0, row, "4H",      text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 1, row, conf_arrow(bias_4h), text_color=bias_color(bias_4h), text_size=conf_size, bgcolor=chart.bg_color, tooltip=choch_tip("4H", bias_4h))
+        table.cell(conf_tbl, 2, row, conf_arrow(ema_4h),  text_color=bias_color(ema_4h),  text_size=conf_size, bgcolor=chart.bg_color, tooltip=ema_tip("4H", ema_4h))
+        table.cell(conf_tbl, 3, row, conf_d4h_aligned ? "✓" : "✗", text_color=conf_d4h_aligned ? COLOR_BULL : COLOR_BEAR, text_size=conf_size, bgcolor=chart.bg_color, tooltip="Daily → 4H CHoCH alignment")
+        table.cell(conf_tbl, 4, row, str.tostring(conf_4h_score) + "/2", text_color=conf_4h_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
         row += 1
 
-        // 1H (max 2: match + 4H→1H aligned)
-        table.cell(conf_tbl, 0, row, "1H",      text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, conf_arrow(bias_1h), text_color=bias_color(bias_1h), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("1H", bias_1h))
-        table.cell(conf_tbl, 2, row, conf_arrow(ema_1h),  text_color=bias_color(ema_1h),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("1H", ema_1h))
-        table.cell(conf_tbl, 3, row, conf_4h1h_aligned ? "✓" : "✗", text_color=conf_4h1h_aligned ? COLOR_BULL : COLOR_BEAR, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="4H → 1H CHoCH alignment")
-        table.cell(conf_tbl, 4, row, str.tostring(conf_1h_score) + "/2", text_color=conf_1h_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        // 1H (max 2: match + 4H→1H aligned) — 5-column data row
+        table.cell(conf_tbl, 0, row, "1H",      text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 1, row, conf_arrow(bias_1h), text_color=bias_color(bias_1h), text_size=conf_size, bgcolor=chart.bg_color, tooltip=choch_tip("1H", bias_1h))
+        table.cell(conf_tbl, 2, row, conf_arrow(ema_1h),  text_color=bias_color(ema_1h),  text_size=conf_size, bgcolor=chart.bg_color, tooltip=ema_tip("1H", ema_1h))
+        table.cell(conf_tbl, 3, row, conf_4h1h_aligned ? "✓" : "✗", text_color=conf_4h1h_aligned ? COLOR_BULL : COLOR_BEAR, text_size=conf_size, bgcolor=chart.bg_color, tooltip="4H → 1H CHoCH alignment")
+        table.cell(conf_tbl, 4, row, str.tostring(conf_1h_score) + "/2", text_color=conf_1h_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
         row += 1
 
-        // Session (label only, no score)
-        table.cell(conf_tbl, 0, row, "Session", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, conf_ses_text, text_color=conf_session_active ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 2, row, "",         text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, row, "",         text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, row, "",         text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        // Session (full-width: label + session text spans cols 0-4)
+        int ses_row = row
+        table.cell(conf_tbl, 0, ses_row, "Session", text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 1, ses_row, conf_ses_text, text_color=conf_session_active ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 2, ses_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 3, ses_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 4, ses_row, "", bgcolor=chart.bg_color)
+        table.merge_cells(conf_tbl, 1, ses_row, 4, ses_row)
         row += 1
 
-        // Separator
-        table.cell(conf_tbl, 0, row, "",  bgcolor=COLOR_TABLE_BG, text_size=conf_size)
-        table.cell(conf_tbl, 1, row, "",  bgcolor=COLOR_TABLE_BG, text_size=conf_size)
-        table.cell(conf_tbl, 2, row, "",  bgcolor=COLOR_TABLE_BG, text_size=conf_size)
-        table.cell(conf_tbl, 3, row, "",  bgcolor=COLOR_TABLE_BG, text_size=conf_size)
-        table.cell(conf_tbl, 4, row, "",  bgcolor=COLOR_TABLE_BG, text_size=conf_size)
+        // Separator (full-width merge cols 0-4)
+        int sep_row = row
+        table.cell(conf_tbl, 0, sep_row, "", bgcolor=chart.bg_color, text_size=conf_size)
+        table.cell(conf_tbl, 1, sep_row, "", bgcolor=chart.bg_color, text_size=conf_size)
+        table.cell(conf_tbl, 2, sep_row, "", bgcolor=chart.bg_color, text_size=conf_size)
+        table.cell(conf_tbl, 3, sep_row, "", bgcolor=chart.bg_color, text_size=conf_size)
+        table.cell(conf_tbl, 4, sep_row, "", bgcolor=chart.bg_color, text_size=conf_size)
+        table.merge_cells(conf_tbl, 0, sep_row, 4, sep_row)
         row += 1
 
-        // === ENTRY CHECKLIST ===
-        table.cell(conf_tbl, 0, row, "ENTRY",       text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, "",             text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 2, row, "",             text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, row, "",             text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, row, "",             text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        // === ENTRY CHECKLIST === (full-width header)
+        int entry_hdr_row = row
+        table.cell(conf_tbl, 0, entry_hdr_row, "ENTRY", text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 1, entry_hdr_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 2, entry_hdr_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 3, entry_hdr_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 4, entry_hdr_row, "", bgcolor=chart.bg_color)
+        table.merge_cells(conf_tbl, 0, entry_hdr_row, 4, entry_hdr_row)
         row += 1
 
-        // FVG
-        table.cell(conf_tbl, 0, row, "FVG Zone",    text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, entry_at_fvg ? "At FVG" : "Not yet", text_color=entry_at_fvg ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 2, row, "",             text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, row, "",             text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, row, entry_at_fvg ? "+1" : "0", text_color=entry_at_fvg ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        // FVG (2-column: label col 0, status merged cols 1-3, score col 4)
+        int fvg_row = row
+        table.cell(conf_tbl, 0, fvg_row, "FVG Zone", text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 1, fvg_row, entry_at_fvg ? "At FVG" : "Not yet", text_color=entry_at_fvg ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 2, fvg_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 3, fvg_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 4, fvg_row, entry_at_fvg ? "+1" : "0", text_color=entry_at_fvg ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
+        table.merge_cells(conf_tbl, 1, fvg_row, 3, fvg_row)
         row += 1
 
-        // Equilibrium
-        table.cell(conf_tbl, 0, row, "Equilibrium",  text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, entry_at_eq ? "At 0.5" : "Not yet", text_color=entry_at_eq ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, row, entry_at_eq ? "+1" : "0", text_color=entry_at_eq ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        // Equilibrium (2-column: label col 0, status merged cols 1-3, score col 4)
+        int eq_row = row
+        table.cell(conf_tbl, 0, eq_row, "Equilibrium", text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 1, eq_row, entry_at_eq ? "At 0.5" : "Not yet", text_color=entry_at_eq ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 2, eq_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 3, eq_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 4, eq_row, entry_at_eq ? "+1" : "0", text_color=entry_at_eq ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
+        table.merge_cells(conf_tbl, 1, eq_row, 3, eq_row)
         row += 1
 
-        // Candle Pattern
-        table.cell(conf_tbl, 0, row, "Candle Pattern", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, entry_has_pattern ? "Detected" : "None", text_color=entry_has_pattern ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 2, row, "",               text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, row, "",               text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, row, entry_has_pattern ? "+1" : "0", text_color=entry_has_pattern ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        // Candle Pattern (2-column: label col 0, status merged cols 1-3, score col 4)
+        int cp_row = row
+        table.cell(conf_tbl, 0, cp_row, "Candle Pattern", text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 1, cp_row, entry_has_pattern ? "Detected" : "None", text_color=entry_has_pattern ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 2, cp_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 3, cp_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 4, cp_row, entry_has_pattern ? "+1" : "0", text_color=entry_has_pattern ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
+        table.merge_cells(conf_tbl, 1, cp_row, 3, cp_row)
         row += 1
 
-        // LTF CHoCH
-        table.cell(conf_tbl, 0, row, "LTF CHoCH",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, entry_ltf_choch ? "Confirmed" : "Waiting", text_color=entry_ltf_choch ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, row, entry_ltf_choch ? "+1" : "0", text_color=entry_ltf_choch ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        // LTF CHoCH (2-column: label col 0, status merged cols 1-3, score col 4)
+        int ltf_row = row
+        table.cell(conf_tbl, 0, ltf_row, "LTF CHoCH", text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 1, ltf_row, entry_ltf_choch ? "Confirmed" : "Waiting", text_color=entry_ltf_choch ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 2, ltf_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 3, ltf_row, "", bgcolor=chart.bg_color)
+        table.cell(conf_tbl, 4, ltf_row, entry_ltf_choch ? "+1" : "0", text_color=entry_ltf_choch ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
+        table.merge_cells(conf_tbl, 1, ltf_row, 3, ltf_row)
         row += 1
 
     // === ALWAYS VISIBLE: Direction + Scores ===
-    // Direction
-    table.cell(conf_tbl, 0, row, "Direction",    text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 1, row, conf_dir_text,  text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 3, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 4, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    // Direction (full-width: label + direction text spans cols 0-4)
+    int dir_row = row
+    table.cell(conf_tbl, 0, dir_row, "Direction", text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+    table.cell(conf_tbl, 1, dir_row, conf_dir_text, text_color=conf_dir_color, text_size=conf_size, bgcolor=chart.bg_color)
+    table.cell(conf_tbl, 2, dir_row, "", bgcolor=chart.bg_color)
+    table.cell(conf_tbl, 3, dir_row, "", bgcolor=chart.bg_color)
+    table.cell(conf_tbl, 4, dir_row, "", bgcolor=chart.bg_color)
+    table.merge_cells(conf_tbl, 1, dir_row, 4, dir_row)
     row += 1
 
-    // Confluence score
-    table.cell(conf_tbl, 0, row, "Confluence",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 1, row, str.tostring(conf_score) + "/7", text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 3, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 4, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    // Confluence score (full-width: label + score spans cols 0-4)
+    int conf_row = row
+    table.cell(conf_tbl, 0, conf_row, "Confluence", text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+    table.cell(conf_tbl, 1, conf_row, str.tostring(conf_score) + "/7", text_color=conf_dir_color, text_size=conf_size, bgcolor=chart.bg_color)
+    table.cell(conf_tbl, 2, conf_row, "", bgcolor=chart.bg_color)
+    table.cell(conf_tbl, 3, conf_row, "", bgcolor=chart.bg_color)
+    table.cell(conf_tbl, 4, conf_row, "", bgcolor=chart.bg_color)
+    table.merge_cells(conf_tbl, 1, conf_row, 4, conf_row)
     row += 1
 
-    // Entry score
-    table.cell(conf_tbl, 0, row, "Entry",        text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 1, row, str.tostring(entry_score) + "/4", text_color=entry_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 3, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 4, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    // Entry score (full-width: label + score spans cols 0-4)
+    int ent_row = row
+    table.cell(conf_tbl, 0, ent_row, "Entry", text_color=chart.fg_color, text_size=conf_size, bgcolor=chart.bg_color)
+    table.cell(conf_tbl, 1, ent_row, str.tostring(entry_score) + "/4", text_color=entry_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=chart.bg_color)
+    table.cell(conf_tbl, 2, ent_row, "", bgcolor=chart.bg_color)
+    table.cell(conf_tbl, 3, ent_row, "", bgcolor=chart.bg_color)
+    table.cell(conf_tbl, 4, ent_row, "", bgcolor=chart.bg_color)
+    table.merge_cells(conf_tbl, 1, ent_row, 4, ent_row)
 
 // --- Alerts ---
 conf_score_meets = conf_score >= conf_alert_threshold
