@@ -27,7 +27,7 @@ show_confluence_table = input.bool(true, "Confluence Table", group="Module Toggl
 conf_show_details    = input.bool(true, "Show Details", group="Confluence", tooltip="Show individual factor rows. Disable to show only Direction and Score.")
 conf_tbl_position    = input.string("Top Right", "Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="Confluence", tooltip="Table position on the chart")
 conf_tbl_size        = input.string("Small", "Text Size", options=["Tiny", "Small", "Normal"], group="Confluence", tooltip="Text size for the confluence table")
-conf_alert_threshold = input.int(6, "Alert Threshold", minval=1, maxval=9, group="Confluence", tooltip="Alert when confluence score reaches this level")
+conf_alert_threshold = input.int(5, "Alert Threshold", minval=1, maxval=7, group="Confluence", tooltip="Alert when confluence score reaches this level")
 
 // ============================================================================
 //                        SHARED CONSTANTS
@@ -507,6 +507,9 @@ var array<int> smc_times        = array.new<int>()
 var smc_initialTime             = time
 
 // --- Premium/Discount Zone Variables ---
+var float pd_eq_val  = na
+var float pd_hi_val  = na
+var float pd_lo_val  = na
 var array<float> pd_highs  = array.new_float(0)
 var array<float> pd_lows   = array.new_float(0)
 var array<float> pd_posVol = array.new_float(0)
@@ -752,6 +755,10 @@ if show_smc and smc_show_zones and barstate.islast
 
     pd_hiMax = pd_highs.max()
     pd_loMin = pd_lows.min()
+
+    pd_eq_val := math.avg(pd_loMin, pd_hiMax)
+    pd_hi_val := pd_hiMax
+    pd_lo_val := pd_loMin
 
     // Delete previous boxes and line
     box.delete(pd_upperBox[1])
@@ -1302,9 +1309,10 @@ bias_color(int b) => b == 1 ? COLOR_BULL : b == -1 ? COLOR_BEAR : COLOR_NEUTRAL
 // ============================================================================
 //                     MODULE: CONFLUENCE TABLE
 // ============================================================================
-// 9-factor scoring: CHoCH + EMA on W, D, 4H, 1H + Session.
-// All factors evaluated on fixed timeframes via request.security().
-// Score is identical regardless of chart timeframe.
+// 7-factor confluence scoring + 4-factor entry checklist.
+// Confluence: cross-TF CHoCH alignment (essential) + same-TF CHoCH+EMA match (nice-to-have)
+// Entry: FVG zone, Equilibrium, Candle Pattern, LTF CHoCH
+// All confluence factors on fixed timeframes. Entry uses min 1H for zones.
 
 // --- Helper functions ---
 
@@ -1327,82 +1335,191 @@ conf_size = switch conf_tbl_size
     "Small"  => size.small
     "Normal" => size.normal
 
-// --- Scoring ---
-conf_bull_count = (bias_w == 1 ? 1 : 0) + (bias_d == 1 ? 1 : 0) + (bias_4h == 1 ? 1 : 0) + (bias_1h == 1 ? 1 : 0) + (ema_w == 1 ? 1 : 0) + (ema_d == 1 ? 1 : 0) + (ema_4h == 1 ? 1 : 0) + (ema_1h == 1 ? 1 : 0)
-conf_bear_count = (bias_w == -1 ? 1 : 0) + (bias_d == -1 ? 1 : 0) + (bias_4h == -1 ? 1 : 0) + (bias_1h == -1 ? 1 : 0) + (ema_w == -1 ? 1 : 0) + (ema_d == -1 ? 1 : 0) + (ema_4h == -1 ? 1 : 0) + (ema_1h == -1 ? 1 : 0)
+// --- Confluence Scoring (7 factors) ---
 
-// Session factor
-conf_session_active = timeframe.isintraday ? (nz(time(timeframe.period, "1300-2200", syminfo.timezone)) > 0 or nz(time(timeframe.period, "0700-1600", syminfo.timezone)) > 0) : true
-conf_session_score = conf_session_active ? 1 : 0
+// Essential: Cross-TF CHoCH alignment (+1 each, max 3)
+// Weekly has no row above, so it only gets nice-to-have
+conf_wd_aligned  = bias_w != 0 and bias_d != 0 and bias_w == bias_d     // W→D aligned
+conf_d4h_aligned = bias_d != 0 and bias_4h != 0 and bias_d == bias_4h   // D→4H aligned
+conf_4h1h_aligned = bias_4h != 0 and bias_1h != 0 and bias_4h == bias_1h // 4H→1H aligned
 
-// Direction: majority vote
-conf_direction = conf_bull_count > conf_bear_count ? 1 : conf_bear_count > conf_bull_count ? -1 : 0
+// Nice-to-have: Same-TF CHoCH + EMA match (+1 each, max 4)
+conf_w_match  = bias_w != 0 and ema_w != 0 and bias_w == ema_w
+conf_d_match  = bias_d != 0 and ema_d != 0 and bias_d == ema_d
+conf_4h_match = bias_4h != 0 and ema_4h != 0 and bias_4h == ema_4h
+conf_1h_match = bias_1h != 0 and ema_1h != 0 and bias_1h == ema_1h
 
-// Score: count signals aligned with majority direction + session
-conf_score = (conf_direction == 1 ? conf_bull_count : conf_direction == -1 ? conf_bear_count : 0) + conf_session_score
+// Per-row scores
+conf_w_score  = (conf_w_match ? 1 : 0)                                          // max 1
+conf_d_score  = (conf_d_match ? 1 : 0) + (conf_wd_aligned ? 1 : 0)             // max 2
+conf_4h_score = (conf_4h_match ? 1 : 0) + (conf_d4h_aligned ? 1 : 0)           // max 2
+conf_1h_score = (conf_1h_match ? 1 : 0) + (conf_4h1h_aligned ? 1 : 0)          // max 2
 
-// Direction labels
+// Total confluence score (max 7)
+conf_score = conf_w_score + conf_d_score + conf_4h_score + conf_1h_score
+
+// Direction: based on cross-TF alignment chain
+// Count aligned directions
+conf_bull_align = (conf_wd_aligned and bias_w == 1 ? 1 : 0) + (conf_d4h_aligned and bias_d == 1 ? 1 : 0) + (conf_4h1h_aligned and bias_4h == 1 ? 1 : 0)
+conf_bear_align = (conf_wd_aligned and bias_w == -1 ? 1 : 0) + (conf_d4h_aligned and bias_d == -1 ? 1 : 0) + (conf_4h1h_aligned and bias_4h == -1 ? 1 : 0)
+conf_direction = conf_bull_align > conf_bear_align ? 1 : conf_bear_align > conf_bull_align ? -1 : 0
+
 conf_dir_text = conf_direction == 1 ? "LONG ▲" : conf_direction == -1 ? "SHORT ▼" : "NEUTRAL ―"
 conf_dir_color = conf_direction == 1 ? COLOR_BULL : conf_direction == -1 ? COLOR_BEAR : COLOR_NEUTRAL
 
-// Session text
+// --- Entry Checklist (4 factors, min 1H) ---
+
+// FVG: is price inside an active FVG in the confluence direction?
+entry_at_fvg = (conf_direction == 1 and fvg_has_active_bull and low <= fvg_active_bull_top and close > fvg_active_bull_btm) or (conf_direction == -1 and fvg_has_active_bear and high >= fvg_active_bear_btm and close < fvg_active_bear_top)
+
+// Equilibrium: is price near the 0.5 level? (within 0.5% of equilibrium)
+entry_at_eq = not na(pd_eq_val) and math.abs(close - pd_eq_val) / pd_eq_val < 0.005
+
+// Candle Pattern: is there a reversal pattern in the confluence direction?
+entry_candle_bull = cp_hammer or cp_ihammer or cp_bulleng or cp_wm
+entry_candle_bear = cp_shooting or cp_hanging or cp_beareng or cp_bm
+entry_has_pattern = (conf_direction == 1 and entry_candle_bull) or (conf_direction == -1 and entry_candle_bear)
+
+// LTF CHoCH: has structure shifted in the trade direction on current chart?
+// This uses the chart's own ChoCH module (cb_os variable)
+entry_ltf_choch = (conf_direction == 1 and cb_os == 1 and cb_os[1] != 1) or (conf_direction == -1 and cb_os == -1 and cb_os[1] != -1)
+
+// Entry score (max 4)
+entry_score = (entry_at_fvg ? 1 : 0) + (entry_at_eq ? 1 : 0) + (entry_has_pattern ? 1 : 0) + (entry_ltf_choch ? 1 : 0)
+
+// Session label (no score)
+conf_session_active = timeframe.isintraday ? (nz(time(timeframe.period, "1300-2200", syminfo.timezone)) > 0 or nz(time(timeframe.period, "0700-1600", syminfo.timezone)) > 0) : true
 conf_ses_text = not timeframe.isintraday ? "Always On" : conf_session_active ? (nz(time(timeframe.period, "1300-2200", syminfo.timezone)) > 0 ? "NY Open" : "London") : "Off Hours"
 
-// --- Table ---
-var table conf_tbl = table.new(conf_tbl_pos, 3, 9, border_width=1)
+// --- Table Drawing ---
+var table conf_tbl = table.new(conf_tbl_pos, 5, 16, border_width=1)
 
 if show_confluence_table and barstate.islast
     int row = 0
 
     if conf_show_details
-        // Header row
+        // === CONFLUENCE SECTION ===
+        // Header
         table.cell(conf_tbl, 0, row, "",        text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, "CHoCH",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Change of Character - structure direction")
         table.cell(conf_tbl, 2, row, "EMA",     text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="EMA 50/100/200 alignment")
+        table.cell(conf_tbl, 3, row, "Aligned", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="CHoCH aligns with timeframe above")
+        table.cell(conf_tbl, 4, row, "Score",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // Weekly
+        // Weekly (max 1: match only)
         table.cell(conf_tbl, 0, row, "Weekly",  text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_arrow(bias_w), text_color=bias_color(bias_w), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("W", bias_w))
         table.cell(conf_tbl, 2, row, conf_arrow(ema_w),  text_color=bias_color(ema_w),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("W", ema_w))
+        table.cell(conf_tbl, 3, row, "—",       text_color=COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Weekly has no timeframe above")
+        table.cell(conf_tbl, 4, row, str.tostring(conf_w_score) + "/1", text_color=conf_w_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // Daily
+        // Daily (max 2: match + W→D aligned)
         table.cell(conf_tbl, 0, row, "Daily",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_arrow(bias_d), text_color=bias_color(bias_d), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("D", bias_d))
         table.cell(conf_tbl, 2, row, conf_arrow(ema_d),  text_color=bias_color(ema_d),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("D", ema_d))
+        table.cell(conf_tbl, 3, row, conf_wd_aligned ? "✓" : "✗", text_color=conf_wd_aligned ? COLOR_BULL : COLOR_BEAR, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Weekly → Daily CHoCH alignment")
+        table.cell(conf_tbl, 4, row, str.tostring(conf_d_score) + "/2", text_color=conf_d_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // 4H
+        // 4H (max 2: match + D→4H aligned)
         table.cell(conf_tbl, 0, row, "4H",      text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_arrow(bias_4h), text_color=bias_color(bias_4h), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("4H", bias_4h))
         table.cell(conf_tbl, 2, row, conf_arrow(ema_4h),  text_color=bias_color(ema_4h),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("4H", ema_4h))
+        table.cell(conf_tbl, 3, row, conf_d4h_aligned ? "✓" : "✗", text_color=conf_d4h_aligned ? COLOR_BULL : COLOR_BEAR, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Daily → 4H CHoCH alignment")
+        table.cell(conf_tbl, 4, row, str.tostring(conf_4h_score) + "/2", text_color=conf_4h_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // 1H
+        // 1H (max 2: match + 4H→1H aligned)
         table.cell(conf_tbl, 0, row, "1H",      text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_arrow(bias_1h), text_color=bias_color(bias_1h), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("1H", bias_1h))
         table.cell(conf_tbl, 2, row, conf_arrow(ema_1h),  text_color=bias_color(ema_1h),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("1H", ema_1h))
+        table.cell(conf_tbl, 3, row, conf_4h1h_aligned ? "✓" : "✗", text_color=conf_4h1h_aligned ? COLOR_BULL : COLOR_BEAR, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="4H → 1H CHoCH alignment")
+        table.cell(conf_tbl, 4, row, str.tostring(conf_1h_score) + "/2", text_color=conf_1h_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // Session row
+        // Session (label only, no score)
         table.cell(conf_tbl, 0, row, "Session", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_ses_text, text_color=conf_session_active ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 2, row, "",         text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, row, "",         text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 4, row, "",         text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-    // Direction row (always visible)
+        // Separator
+        table.cell(conf_tbl, 0, row, "",  bgcolor=COLOR_TABLE_BG, text_size=conf_size)
+        table.cell(conf_tbl, 1, row, "",  bgcolor=COLOR_TABLE_BG, text_size=conf_size)
+        table.cell(conf_tbl, 2, row, "",  bgcolor=COLOR_TABLE_BG, text_size=conf_size)
+        table.cell(conf_tbl, 3, row, "",  bgcolor=COLOR_TABLE_BG, text_size=conf_size)
+        table.cell(conf_tbl, 4, row, "",  bgcolor=COLOR_TABLE_BG, text_size=conf_size)
+        row += 1
+
+        // === ENTRY CHECKLIST ===
+        table.cell(conf_tbl, 0, row, "ENTRY",       text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, "",             text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 2, row, "",             text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, row, "",             text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 4, row, "",             text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        row += 1
+
+        // FVG
+        table.cell(conf_tbl, 0, row, "FVG Zone",    text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, entry_at_fvg ? "At FVG" : "Not yet", text_color=entry_at_fvg ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 2, row, "",             text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, row, "",             text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 4, row, entry_at_fvg ? "+1" : "0", text_color=entry_at_fvg ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        row += 1
+
+        // Equilibrium
+        table.cell(conf_tbl, 0, row, "Equilibrium",  text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, entry_at_eq ? "At 0.5" : "Not yet", text_color=entry_at_eq ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 4, row, entry_at_eq ? "+1" : "0", text_color=entry_at_eq ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        row += 1
+
+        // Candle Pattern
+        table.cell(conf_tbl, 0, row, "Candle Pattern", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, entry_has_pattern ? "Detected" : "None", text_color=entry_has_pattern ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 2, row, "",               text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, row, "",               text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 4, row, entry_has_pattern ? "+1" : "0", text_color=entry_has_pattern ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        row += 1
+
+        // LTF CHoCH
+        table.cell(conf_tbl, 0, row, "LTF CHoCH",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, entry_ltf_choch ? "Confirmed" : "Waiting", text_color=entry_ltf_choch ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 4, row, entry_ltf_choch ? "+1" : "0", text_color=entry_ltf_choch ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        row += 1
+
+    // === ALWAYS VISIBLE: Direction + Scores ===
+    // Direction
     table.cell(conf_tbl, 0, row, "Direction",    text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 1, row, conf_dir_text,  text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 3, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 4, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
     row += 1
 
-    // Confluence score row (always visible)
+    // Confluence score
     table.cell(conf_tbl, 0, row, "Confluence",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 1, row, str.tostring(conf_score) + "/9", text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 1, row, str.tostring(conf_score) + "/7", text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 3, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 4, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    row += 1
 
-// --- Confluence Alert ---
+    // Entry score
+    table.cell(conf_tbl, 0, row, "Entry",        text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 1, row, str.tostring(entry_score) + "/4", text_color=entry_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 3, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 4, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+
+// --- Alerts ---
 conf_score_meets = conf_score >= conf_alert_threshold
 alertcondition(conf_score_meets and not conf_score_meets[1], "Confluence Ready", "Nexus confluence score reached threshold")
 
