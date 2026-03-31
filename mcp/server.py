@@ -42,10 +42,10 @@ def get_strategy_config() -> str:
     """Current default strategy configuration."""
     return (
         "Strategy defaults:\n"
-        "  min_score: 6 (minimum confluence score to trade, range 1-9)\n"
+        "  min_score: 5 (minimum confluence score to trade, range 1-7)\n"
         "  rr_ratio: 3.0 (risk:reward ratio for TP calculation)\n"
         "  max_daily_losses: 3\n"
-        "  scoring: 9 factors (CHoCH + EMA on W/D/4H/1H + Session)\n"
+        "  scoring: 7 factors (cross-TF alignment + same-TF CHoCH/EMA match)\n"
         "  sl_buffer: 0.5 ATR\n"
     )
 
@@ -193,7 +193,7 @@ def nexus_get_trade_setup(
     symbol: str = "BTC/USDT",
     timeframe: str = "1h",
     exchange: str = "kraken",
-    min_score: int = 6,
+    min_score: int = 5,
     rr_ratio: float = 3.0,
 ) -> dict:
     """
@@ -205,14 +205,14 @@ def nexus_get_trade_setup(
         symbol: Trading pair in CCXT format (e.g. BTC/USDT)
         timeframe: Chart timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
         exchange: Any CCXT-supported exchange
-        min_score: Minimum confluence score to qualify a setup (1-9, default 6)
+        min_score: Minimum confluence score to qualify a setup (1-7, default 5)
         rr_ratio: Risk:Reward ratio for take profit calculation (default 3.0)
     """
     err = _validate_params(symbol, timeframe)
     if err:
         return {"error": err}
 
-    min_score = max(1, min(min_score, 9))
+    min_score = max(1, min(min_score, 7))
     rr_ratio = max(0.5, min(rr_ratio, 10.0))
 
     _setup_paths()
@@ -243,7 +243,7 @@ def nexus_get_trade_setup(
         trail_top, trail_btm = smc_swing_zones(df, swing_len)
         entry_atr = atr(df, config.atr_period)
 
-        score, direction, _ = compute_confluence(
+        score, direction = compute_confluence(
             df,
             config,
             choch_w=choch,
@@ -331,7 +331,7 @@ def nexus_run_backtest(
     timeframe: str = "1h",
     exchange: str = "kraken",
     bars: int = 2000,
-    min_score: int = 6,
+    min_score: int = 5,
     rr_ratio: float = 3.0,
     max_daily_losses: int = 3,
 ) -> dict:
@@ -345,7 +345,7 @@ def nexus_run_backtest(
         timeframe: Chart timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
         exchange: Any CCXT-supported exchange
         bars: Number of historical bars to test (50-5000, more = slower but more reliable)
-        min_score: Minimum confluence score to enter trades (1-9, default 6)
+        min_score: Minimum confluence score to enter trades (1-7, default 5)
         rr_ratio: Risk:Reward ratio (default 3.0 = 3R take profit)
         max_daily_losses: Stop trading after N losses per day (1-10, default 3)
     """
@@ -354,7 +354,7 @@ def nexus_run_backtest(
         return {"error": err}
 
     bars = max(50, min(bars, 5000))
-    min_score = max(1, min(min_score, 9))
+    min_score = max(1, min(min_score, 7))
     rr_ratio = max(0.5, min(rr_ratio, 10.0))
     max_daily_losses = max(1, min(max_daily_losses, 10))
 

@@ -30,7 +30,7 @@ class StrategyConfig:
     rr_ratio: float = 3.0
     sl_buffer_atr: float = 0.5
     atr_period: int = 20
-    min_score: int = 6
+    min_score: int = 5
     max_daily_losses: int = 3
     commission_pct: float = 0.1
     slippage_pct: float = 0.05
@@ -49,42 +49,49 @@ def compute_confluence(
     ema_d: pd.Series,
     ema_4h: pd.Series,
     ema_1h: pd.Series,
-) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """Compute 9-factor confluence: CHoCH + EMA on W/D/4H/1H + session.
-    Returns (score, direction, session_score) series.
+) -> tuple[pd.Series, pd.Series]:
+    """Compute 7-factor confluence: cross-TF alignment (essential) + same-TF match (nice-to-have).
+    Returns (score, direction) series. Max score = 7.
     """
-    bull_count = (
-        (choch_w == 1).astype(int)
-        + (choch_d == 1).astype(int)
-        + (choch_4h == 1).astype(int)
-        + (choch_1h == 1).astype(int)
-        + (ema_w == 1).astype(int)
-        + (ema_d == 1).astype(int)
-        + (ema_4h == 1).astype(int)
-        + (ema_1h == 1).astype(int)
-    )
-    bear_count = (
-        (choch_w == -1).astype(int)
-        + (choch_d == -1).astype(int)
-        + (choch_4h == -1).astype(int)
-        + (choch_1h == -1).astype(int)
-        + (ema_w == -1).astype(int)
-        + (ema_d == -1).astype(int)
-        + (ema_4h == -1).astype(int)
-        + (ema_1h == -1).astype(int)
+    # Essential: cross-TF CHoCH alignment
+    wd_aligned = (choch_w != 0) & (choch_d != 0) & (choch_w == choch_d)
+    d4h_aligned = (choch_d != 0) & (choch_4h != 0) & (choch_d == choch_4h)
+    h4h1h_aligned = (choch_4h != 0) & (choch_1h != 0) & (choch_4h == choch_1h)
+
+    # Nice-to-have: same-TF CHoCH + EMA match
+    w_match = (choch_w != 0) & (ema_w != 0) & (choch_w == ema_w)
+    d_match = (choch_d != 0) & (ema_d != 0) & (choch_d == ema_d)
+    h4_match = (choch_4h != 0) & (ema_4h != 0) & (choch_4h == ema_4h)
+    h1_match = (choch_1h != 0) & (ema_1h != 0) & (choch_1h == ema_1h)
+
+    # Score
+    score = (
+        wd_aligned.astype(int)
+        + d4h_aligned.astype(int)
+        + h4h1h_aligned.astype(int)
+        + w_match.astype(int)
+        + d_match.astype(int)
+        + h4_match.astype(int)
+        + h1_match.astype(int)
     )
 
-    session = pd.Series(1, index=df.index, dtype=int)
+    # Direction from alignment chain
+    bull_align = (
+        (wd_aligned & (choch_w == 1)).astype(int)
+        + (d4h_aligned & (choch_d == 1)).astype(int)
+        + (h4h1h_aligned & (choch_4h == 1)).astype(int)
+    )
+    bear_align = (
+        (wd_aligned & (choch_w == -1)).astype(int)
+        + (d4h_aligned & (choch_d == -1)).astype(int)
+        + (h4h1h_aligned & (choch_4h == -1)).astype(int)
+    )
 
     direction = pd.Series(0, index=df.index, dtype=int)
-    direction[bull_count > bear_count] = 1
-    direction[bear_count > bull_count] = -1
+    direction[bull_align > bear_align] = 1
+    direction[bear_align > bull_align] = -1
 
-    score = pd.Series(0, index=df.index, dtype=int)
-    score[direction == 1] = bull_count[direction == 1] + session[direction == 1]
-    score[direction == -1] = bear_count[direction == -1] + session[direction == -1]
-
-    return score, direction, session
+    return score, direction
 
 
 def run_backtest(df: pd.DataFrame, config: StrategyConfig = StrategyConfig()) -> list[Trade]:
@@ -105,7 +112,7 @@ def run_backtest(df: pd.DataFrame, config: StrategyConfig = StrategyConfig()) ->
 
     # Confluence (single TF proxy — in production, pass actual HTF series)
     choch_1h = choch
-    score, direction, _ = compute_confluence(
+    score, direction = compute_confluence(
         df,
         config,
         choch_w=choch_1h,

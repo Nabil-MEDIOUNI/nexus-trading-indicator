@@ -77,7 +77,7 @@ class TestSetupTool:
         choch = choch_bos(market_data, 1)
         ema_align = compute_ema_alignment(market_data)
 
-        score, direction, _ = compute_confluence(
+        score, direction = compute_confluence(
             market_data,
             config,
             choch_w=choch,
@@ -89,7 +89,7 @@ class TestSetupTool:
             ema_4h=ema_align,
             ema_1h=ema_align,
         )
-        assert (score >= 0).all() and (score <= 9).all()
+        assert (score >= 0).all() and (score <= 7).all()
         assert set(direction.unique()).issubset({-1, 0, 1})
 
     def test_sl_tp_valid_for_long(self, market_data):
@@ -122,8 +122,8 @@ class TestBacktestTool:
             assert 0 <= m.win_rate <= 100
 
     def test_stricter_score_fewer_trades(self, market_data):
-        loose = run_backtest(market_data, StrategyConfig(min_score=2))
-        strict = run_backtest(market_data, StrategyConfig(min_score=5))
+        loose = run_backtest(market_data, StrategyConfig(min_score=5))
+        strict = run_backtest(market_data, StrategyConfig(min_score=7))
         assert len(loose) >= len(strict)
 
     def test_assessment_logic(self):
