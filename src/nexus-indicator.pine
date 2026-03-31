@@ -1393,14 +1393,23 @@ conf_session_active = timeframe.isintraday ? (nz(time(timeframe.period, "1300-22
 conf_ses_text = not timeframe.isintraday ? "Always On" : conf_session_active ? (nz(time(timeframe.period, "1300-2200", syminfo.timezone)) > 0 ? "NY Open" : "London") : "Off Hours"
 
 // --- Table Drawing ---
-var table conf_tbl = table.new(conf_tbl_pos, 5, 16, border_width=1, border_color=COLOR_TABLE_BORDER, bgcolor=COLOR_TABLE_BG, frame_width=1, frame_color=COLOR_TABLE_BORDER)
+var table conf_tbl = table.new(conf_tbl_pos, 5, 18, border_width=1, border_color=COLOR_TABLE_BORDER, bgcolor=COLOR_TABLE_BG, frame_width=1, frame_color=COLOR_TABLE_BORDER)
 
 if show_confluence_table and barstate.islast
     int row = 0
 
     if conf_show_details
-        // === CONFLUENCE SECTION ===
-        // Header (5-column, keep as-is)
+        // === CONFLUENCE SECTION TITLE ===
+        int conf_title_row = row
+        table.cell(conf_tbl, 0, conf_title_row, "CONFLUENCE", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, conf_title_row, "", bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 2, conf_title_row, "", bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, conf_title_row, "", bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 4, conf_title_row, "", bgcolor=COLOR_TABLE_BG)
+        table.merge_cells(conf_tbl, 0, conf_title_row, 4, conf_title_row)
+        row += 1
+
+        // Header (5-column)
         table.cell(conf_tbl, 0, row, "",        text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, "CHoCH",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Change of Character - structure direction")
         table.cell(conf_tbl, 2, row, "EMA",     text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="EMA 50/100/200 alignment")
@@ -1510,18 +1519,17 @@ if show_confluence_table and barstate.islast
         table.merge_cells(conf_tbl, 1, ltf_row, 3, ltf_row)
         row += 1
 
-    // === ALWAYS VISIBLE: Direction + Scores ===
-    // Direction (full-width: label + direction text spans cols 0-4)
-    int dir_row = row
-    table.cell(conf_tbl, 0, dir_row, "Direction", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 1, dir_row, conf_dir_text, text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 2, dir_row, "", bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 3, dir_row, "", bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 4, dir_row, "", bgcolor=COLOR_TABLE_BG)
-    table.merge_cells(conf_tbl, 1, dir_row, 4, dir_row)
+    // === SUMMARY SECTION TITLE ===
+    int sum_title_row = row
+    table.cell(conf_tbl, 0, sum_title_row, "SUMMARY", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 1, sum_title_row, "", bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 2, sum_title_row, "", bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 3, sum_title_row, "", bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 4, sum_title_row, "", bgcolor=COLOR_TABLE_BG)
+    table.merge_cells(conf_tbl, 0, sum_title_row, 4, sum_title_row)
     row += 1
 
-    // Confluence score (full-width: label + score spans cols 0-4)
+    // Confluence score
     int conf_row = row
     table.cell(conf_tbl, 0, conf_row, "Confluence", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 1, conf_row, str.tostring(conf_score) + "/7", text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
@@ -1531,7 +1539,7 @@ if show_confluence_table and barstate.islast
     table.merge_cells(conf_tbl, 1, conf_row, 4, conf_row)
     row += 1
 
-    // Entry score (full-width: label + score spans cols 0-4)
+    // Entry score
     int ent_row = row
     table.cell(conf_tbl, 0, ent_row, "Entry", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 1, ent_row, str.tostring(entry_score) + "/4", text_color=entry_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
@@ -1539,6 +1547,16 @@ if show_confluence_table and barstate.islast
     table.cell(conf_tbl, 3, ent_row, "", bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 4, ent_row, "", bgcolor=COLOR_TABLE_BG)
     table.merge_cells(conf_tbl, 1, ent_row, 4, ent_row)
+    row += 1
+
+    // Direction (last — the conclusion)
+    int dir_row = row
+    table.cell(conf_tbl, 0, dir_row, "Direction", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 1, dir_row, conf_dir_text, text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 2, dir_row, "", bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 3, dir_row, "", bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 4, dir_row, "", bgcolor=COLOR_TABLE_BG)
+    table.merge_cells(conf_tbl, 1, dir_row, 4, dir_row)
 
 // --- Alerts ---
 conf_score_meets = conf_score >= conf_alert_threshold
