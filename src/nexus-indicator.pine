@@ -13,19 +13,20 @@ indicator("Nexus Trading Indicator", shorttitle="NEXUS", overlay=true, max_lines
 //                          MODULE TOGGLES
 // ============================================================================
 
-show_market_structure = input.bool(true, "Market Structure (HH/HL/LH/LL)", group="Module Toggles")
-show_ema              = input.bool(false, "Triple EMA (50/100/200)", group="Module Toggles")
-show_sessions         = input.bool(true, "Trading Sessions", group="Module Toggles")
-show_smc              = input.bool(true, "SMC Features", group="Module Toggles")
-show_choch_bos        = input.bool(false, "ChoCH / BOS", group="Module Toggles")
-show_fvg              = input.bool(true, "Fair Value Gaps (FVG)", group="Module Toggles")
-show_liq              = input.bool(true, "Liquidity Swings", group="Module Toggles")
-show_candle_patterns  = input.bool(true, "Candlestick Patterns", group="Module Toggles")
-show_confluence_table = input.bool(true, "Confluence Table", group="Module Toggles")
+show_market_structure = input.bool(true, "Market Structure (HH/HL/LH/LL)", group="Module Toggles", tooltip="Show zigzag swing structure with Higher High, Higher Low, Lower High, Lower Low labels")
+show_ema              = input.bool(false, "Triple EMA (50/100/200)", group="Module Toggles", tooltip="Plot three Exponential Moving Averages on the chart")
+show_sessions         = input.bool(true, "Trading Sessions", group="Module Toggles", tooltip="Show New York, London, and Asia session time zones with dividers")
+show_smc              = input.bool(true, "SMC Features", group="Module Toggles", tooltip="Show Smart Money Concepts: swing structure, equal highs/lows, MTF levels, and premium/discount zones")
+show_choch_bos        = input.bool(false, "ChoCH / BOS", group="Module Toggles", tooltip="Show Change of Character and Break of Structure labels when price breaks swing levels")
+show_fvg              = input.bool(true, "Fair Value Gaps (FVG)", group="Module Toggles", tooltip="Show imbalance zones where price gapped over a candle body")
+show_liq              = input.bool(true, "Liquidity Swings", group="Module Toggles", tooltip="Show swing pivot levels and detect when they are swept by price")
+show_candle_patterns  = input.bool(true, "Candlestick Patterns", group="Module Toggles", tooltip="Detect and label reversal and continuation candlestick patterns")
+show_confluence_table = input.bool(true, "Confluence Table", group="Module Toggles", tooltip="Show the multi-timeframe confluence scoring table")
 
 // --- Confluence Settings ---
 conf_show_details    = input.bool(true, "Show Details", group="Confluence", tooltip="Show individual factor rows. Disable to show only Direction and Score.")
-conf_tbl_position    = input.string("Top Right", "Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="Confluence")
+conf_tbl_position    = input.string("Top Right", "Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="Confluence", tooltip="Table position on the chart")
+conf_tbl_size        = input.string("Small", "Text Size", options=["Tiny", "Small", "Normal"], group="Confluence", tooltip="Text size for the confluence table")
 conf_alert_threshold = input.int(6, "Alert Threshold", minval=1, maxval=9, group="Confluence", tooltip="Alert when confluence score reaches this level")
 
 // ============================================================================
@@ -41,20 +42,16 @@ COLOR_BEAR        = #f7525f
 COLOR_NEUTRAL     = #878b94
 COLOR_TRANSPARENT = color.new(color.white, 100)
 COLOR_TABLE_BG    = #2d2d2d
+COLOR_DISCOUNT    = #79c1f1
+COLOR_PREMIUM     = #f19579
 
 // --- Magic Numbers ---
-ATR_PERIOD_SWING   = 200   // SMC swing measurement
-ATR_PERIOD_PATTERN = 20    // Candlestick pattern threshold
-ATR_PERIOD_SESSION = 14    // Session overlap detection
-LIQ_SWING_LENGTH   = 14    // Liquidity pivot detection
-FVG_BODY_THRESHOLD = 0.36  // Min body ratio for FVG candle
-FVG_BREAK_LOOKBACK = 10    // Max FVG boxes to check for breaks
-FVG_EXTENSION_BARS = 8     // Bars to extend FVG boxes forward
-FVG_PRESENT_LIMIT  = 500   // Bar lookback for present mode
-SES_LINE_EXTENSION = 30    // Bars to extend session H/L lines
-SES_OVERLAP_MULT   = 0.3   // ATR multiplier for overlap detection
-MTF_TIME_EXTENSION = 20    // Multiplier for MTF level line extension
 SMC_MAX_ARRAY_SIZE = 10000 // Max bars stored for MTF level calculations
+SES_ATR_PERIOD     = 14    // ATR period for session overlap detection
+SES_OVERLAP_MULT   = 0.3   // ATR multiplier for session overlap threshold
+FVG_PRESENT_LIMIT  = 500   // Bars back to scan for FVGs in Present mode
+SMC_ATR_PERIOD     = 200   // ATR period for swing measurement and zone scaling
+SMC_MTF_LINE_EXT   = 20    // Multiplier for extending MTF level lines forward
 
 // ============================================================================
 //                      SHARED UTILITY FUNCTIONS
@@ -80,11 +77,11 @@ f_getLineStyle(string style) =>
 
 // --- Settings ---
 
-ms_zigzag_len  = input.int(10, "Zigzag Length", minval=1, maxval=50, group="Market Structure")
-ms_source      = input.string("Wick", "Source", options=["Wick", "Body"], group="Market Structure")
+ms_zigzag_len = input.int(10, "Zigzag Length", minval=1, maxval=50, group="Market Structure", tooltip="Number of bars to look back for detecting swing pivots")
+ms_source     = input.string("Wick", "Source", options=["Wick", "Body"], group="Market Structure", tooltip="Use candle wicks or bodies for pivot detection")
 ms_lineColor  = input.color(#000000, "Line Color", inline="ms_col", group="Market Structure")
-ms_lineWidth  = input.int(2, "Line Width", minval=1, maxval=5, inline="ms_line", group="Market Structure")
-ms_labelSize  = input.string("Small", "Label Size", options=["Tiny", "Small", "Normal", "Large"], inline="ms_line", group="Market Structure")
+ms_lineWidth  = input.int(2, "Line Width", minval=1, maxval=5, inline="ms_line", group="Market Structure", tooltip="Thickness of the zigzag lines")
+ms_labelSize  = input.string("Small", "Label Size", options=["Tiny", "Small", "Normal", "Large"], inline="ms_line", group="Market Structure", tooltip="Size of HH/HL/LH/LL labels")
 
 // --- Constants ---
 
@@ -234,12 +231,12 @@ if barstate.islast and show_market_structure
 
 // --- Settings ---
 
-ema_len1  = input.int(50, "EMA 1 Length", minval=1, group="Triple EMA")
-ema_col1  = input.color(#f7525f, "EMA 1 Color", inline="ema1", group="Triple EMA")
-ema_len2  = input.int(100, "EMA 2 Length", minval=1, group="Triple EMA")
-ema_col2  = input.color(#22ab94, "EMA 2 Color", inline="ema2", group="Triple EMA")
-ema_len3  = input.int(200, "EMA 3 Length", minval=1, group="Triple EMA")
-ema_col3  = input.color(color.rgb(0, 0, 0), "EMA 3 Color", inline="ema3", group="Triple EMA")
+ema_len1 = input.int(50, "EMA 1 Length", minval=1, group="Triple EMA", tooltip="Period for the fast EMA")
+ema_col1 = input.color(#f7525f, "EMA 1 Color", inline="ema1", group="Triple EMA")
+ema_len2 = input.int(100, "EMA 2 Length", minval=1, group="Triple EMA", tooltip="Period for the medium EMA")
+ema_col2 = input.color(#22ab94, "EMA 2 Color", inline="ema2", group="Triple EMA")
+ema_len3 = input.int(200, "EMA 3 Length", minval=1, group="Triple EMA", tooltip="Period for the slow EMA")
+ema_col3 = input.color(color.rgb(0, 0, 0), "EMA 3 Color", inline="ema3", group="Triple EMA")
 
 // --- Execution ---
 
@@ -258,23 +255,25 @@ plot(show_ema ? ema3 : na, title="EMA 3", color=ema_col3, linewidth=1, display=d
 // --- Settings ---
 
 // New York
-ses_show_ny   = input.bool(true, "New York", inline="ses_ny", group="Sessions")
+ses_show_ny   = input.bool(true, "New York", inline="ses_ny", group="Sessions", tooltip="Show New York session (default 1300-2200 UTC)")
 ses_ny_time   = input.session("1300-2200", "", inline="ses_ny", group="Sessions")
 ses_ny_color  = input.color(#ff5d00, "", inline="ses_ny", group="Sessions")
 
 // London
-ses_show_ldn  = input.bool(true, "London", inline="ses_ldn", group="Sessions")
+ses_show_ldn  = input.bool(true, "London", inline="ses_ldn", group="Sessions", tooltip="Show London session (default 0700-1600 UTC)")
 ses_ldn_time  = input.session("0700-1600", "", inline="ses_ldn", group="Sessions")
 ses_ldn_color = input.color(#2157f3, "", inline="ses_ldn", group="Sessions")
 
 // Asia
-ses_show_asia = input.bool(true, "Asia", inline="ses_asia", group="Sessions")
-ses_asia_time = input.session("0000-0900", "", inline="ses_asia", group="Sessions")
-ses_asia_color= input.color(#e91e63, "", inline="ses_asia", group="Sessions")
+ses_show_asia  = input.bool(true, "Asia", inline="ses_asia", group="Sessions", tooltip="Show Asia session (default 0000-0900 UTC)")
+ses_asia_time  = input.session("0000-0900", "", inline="ses_asia", group="Sessions")
+ses_asia_color = input.color(#e91e63, "", inline="ses_asia", group="Sessions")
 
 // Dividers always shown
 ses_show_divider = true
-ses_show_hl      = input.bool(false, "Session High/Low Lines", group="Sessions")
+ses_show_hl      = input.bool(false, "Session High/Low Lines", group="Sessions", tooltip="Draw horizontal lines at session high and low levels")
+
+ses_line_ext     = input.int(30, "Line Extension", minval=5, maxval=100, group="Sessions", tooltip="Number of bars to extend session high/low lines forward")
 
 // --- Functions ---
 
@@ -293,10 +292,10 @@ ses_draw_hl(bool is_active, bool show, color css, string tag) =>
             line.delete(ses_l_line)
             label.delete(ses_h_lbl)
             label.delete(ses_l_lbl)
-            ses_h_line := line.new(bar_index, ses_h, bar_index + SES_LINE_EXTENSION, ses_h, color=css, style=line.style_dashed)
-            ses_l_line := line.new(bar_index, ses_l, bar_index + SES_LINE_EXTENSION, ses_l, color=css, style=line.style_dashed)
-            ses_h_lbl := label.new(bar_index + SES_LINE_EXTENSION, ses_h, tag + "H", style=label.style_label_left, color=COLOR_TRANSPARENT, textcolor=css, size=size.tiny)
-            ses_l_lbl := label.new(bar_index + SES_LINE_EXTENSION, ses_l, tag + "L", style=label.style_label_left, color=COLOR_TRANSPARENT, textcolor=css, size=size.tiny)
+            ses_h_line := line.new(bar_index, ses_h, bar_index + ses_line_ext, ses_h, color=css, style=line.style_dashed)
+            ses_l_line := line.new(bar_index, ses_l, bar_index + ses_line_ext, ses_l, color=css, style=line.style_dashed)
+            ses_h_lbl := label.new(bar_index + ses_line_ext, ses_h, tag + "H", style=label.style_label_left, color=COLOR_TRANSPARENT, textcolor=css, size=size.tiny)
+            ses_l_lbl := label.new(bar_index + ses_line_ext, ses_l, tag + "L", style=label.style_label_left, color=COLOR_TRANSPARENT, textcolor=css, size=size.tiny)
         if is_active
             if high > ses_h
                 ses_h := high
@@ -304,10 +303,10 @@ ses_draw_hl(bool is_active, bool show, color css, string tag) =>
                 ses_l := low
             line.set_y1(ses_h_line, ses_h), line.set_y2(ses_h_line, ses_h)
             line.set_y1(ses_l_line, ses_l), line.set_y2(ses_l_line, ses_l)
-        line.set_x2(ses_h_line, bar_index + SES_LINE_EXTENSION)
-        line.set_x2(ses_l_line, bar_index + SES_LINE_EXTENSION)
-        label.set_x(ses_h_lbl, bar_index + SES_LINE_EXTENSION), label.set_y(ses_h_lbl, ses_h)
-        label.set_x(ses_l_lbl, bar_index + SES_LINE_EXTENSION), label.set_y(ses_l_lbl, ses_l)
+        line.set_x2(ses_h_line, bar_index + ses_line_ext)
+        line.set_x2(ses_l_line, bar_index + ses_line_ext)
+        label.set_x(ses_h_lbl, bar_index + ses_line_ext), label.set_y(ses_h_lbl, ses_h)
+        label.set_x(ses_l_lbl, bar_index + ses_line_ext), label.set_y(ses_l_lbl, ses_l)
     [ses_h, ses_l, ses_h_line, ses_l_line, ses_h_lbl, ses_l_lbl]
 
 ses_is_close(float a, float b, float thr) =>
@@ -395,28 +394,28 @@ if show_sessions and ses_show_hl and timeframe.isintraday
     [ld_h, ld_l, ld_hl, ld_ll, ld_hlbl, ld_llbl] = ses_draw_hl(ses_is_ldn, ses_show_ldn, ses_ldn_color, "LD")
     [as_h, as_l, as_hl, as_ll, as_hlbl, as_llbl] = ses_draw_hl(ses_is_asia, ses_show_asia, ses_asia_color, "AS")
 
-    ses_thr = ta.atr(ATR_PERIOD_SESSION) * SES_OVERLAP_MULT
+    ses_thr = ta.atr(SES_ATR_PERIOD) * SES_OVERLAP_MULT
 
     // LD overlaps NY → extend LD to +38
     if ses_is_close(ld_h, ny_h, ses_thr) or ses_is_close(ld_h, ny_l, ses_thr)
-        line.set_x2(ld_hl, bar_index + SES_LINE_EXTENSION + 8), label.set_x(ld_hlbl, bar_index + SES_LINE_EXTENSION + 8)
+        line.set_x2(ld_hl, bar_index + ses_line_ext + 8), label.set_x(ld_hlbl, bar_index + ses_line_ext + 8)
     if ses_is_close(ld_l, ny_h, ses_thr) or ses_is_close(ld_l, ny_l, ses_thr)
-        line.set_x2(ld_ll, bar_index + SES_LINE_EXTENSION + 8), label.set_x(ld_llbl, bar_index + SES_LINE_EXTENSION + 8)
+        line.set_x2(ld_ll, bar_index + ses_line_ext + 8), label.set_x(ld_llbl, bar_index + ses_line_ext + 8)
 
     // AS overlaps NY or LD → extend AS to +38, or +46 if both
     as_h_vs_ny = ses_is_close(as_h, ny_h, ses_thr) or ses_is_close(as_h, ny_l, ses_thr)
     as_h_vs_ld = ses_is_close(as_h, ld_h, ses_thr) or ses_is_close(as_h, ld_l, ses_thr)
     if as_h_vs_ny and as_h_vs_ld
-        line.set_x2(as_hl, bar_index + SES_LINE_EXTENSION + 16), label.set_x(as_hlbl, bar_index + SES_LINE_EXTENSION + 16)
+        line.set_x2(as_hl, bar_index + ses_line_ext + 16), label.set_x(as_hlbl, bar_index + ses_line_ext + 16)
     else if as_h_vs_ny or as_h_vs_ld
-        line.set_x2(as_hl, bar_index + SES_LINE_EXTENSION + 8), label.set_x(as_hlbl, bar_index + SES_LINE_EXTENSION + 8)
+        line.set_x2(as_hl, bar_index + ses_line_ext + 8), label.set_x(as_hlbl, bar_index + ses_line_ext + 8)
 
     as_l_vs_ny = ses_is_close(as_l, ny_h, ses_thr) or ses_is_close(as_l, ny_l, ses_thr)
     as_l_vs_ld = ses_is_close(as_l, ld_h, ses_thr) or ses_is_close(as_l, ld_l, ses_thr)
     if as_l_vs_ny and as_l_vs_ld
-        line.set_x2(as_ll, bar_index + SES_LINE_EXTENSION + 16), label.set_x(as_llbl, bar_index + SES_LINE_EXTENSION + 16)
+        line.set_x2(as_ll, bar_index + ses_line_ext + 16), label.set_x(as_llbl, bar_index + ses_line_ext + 16)
     else if as_l_vs_ny or as_l_vs_ld
-        line.set_x2(as_ll, bar_index + SES_LINE_EXTENSION + 8), label.set_x(as_llbl, bar_index + SES_LINE_EXTENSION + 8)
+        line.set_x2(as_ll, bar_index + ses_line_ext + 8), label.set_x(as_llbl, bar_index + ses_line_ext + 8)
 
 // ============================================================================
 //                          MODULE: SMC
@@ -424,34 +423,32 @@ if show_sessions and ses_show_hl and timeframe.isintraday
 
 // --- Settings: Strong/Weak HL ---
 
-smc_show_hl        = input.bool(true, "Strong/Weak High/Low", group="SMC - Strong/Weak HL")
-smc_hl_bull_color  = input.color(#000000, "Bullish Color", inline="hl_col", group="SMC - Strong/Weak HL")
-smc_hl_bear_color  = input.color(#000000, "Bearish Color", inline="hl_col", group="SMC - Strong/Weak HL")
+smc_show_hl        = input.bool(true, "Strong/Weak High/Low", group="Smart Money Concepts", tooltip="Label the current swing high and low as strong or weak based on trend direction")
+smc_hl_bull_color  = input.color(#000000, "Bullish Color", inline="hl_col", group="Smart Money Concepts")
+smc_hl_bear_color  = input.color(#000000, "Bearish Color", inline="hl_col", group="Smart Money Concepts")
 
 // --- Settings: Equal HL ---
 
-smc_show_eqhl      = input.bool(true, "Equal Highs/Lows", group="SMC - Equal HL")
-smc_eqhl_len       = input.int(3, "Bars Confirmation", minval=1, group="SMC - Equal HL")
-smc_eqhl_threshold = input.float(0.1, "Threshold", minval=0, maxval=0.5, step=0.1, group="SMC - Equal HL")
+smc_show_eqhl      = input.bool(true, "Equal Highs/Lows", group="Smart Money Concepts", tooltip="Detect when consecutive swing highs or lows form at similar price levels")
+smc_eqhl_len       = input.int(3, "Equal HL Confirmation Bars", minval=1, group="Smart Money Concepts", tooltip="Number of bars to confirm an equal high or low")
+smc_eqhl_threshold = input.float(0.1, "Equal HL Threshold", minval=0, maxval=0.5, step=0.1, group="Smart Money Concepts", tooltip="ATR fraction — swings closer than this are considered equal")
 
 // --- Settings: MTF Levels ---
 
-smc_show_daily     = input.bool(true, "Daily", inline="daily", group="SMC - MTF Levels")
-smc_daily_style    = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="daily", group="SMC - MTF Levels")
-smc_daily_color    = input.color(#000000, "", inline="daily", group="SMC - MTF Levels")
-smc_show_weekly    = input.bool(false, "Weekly", inline="weekly", group="SMC - MTF Levels")
-smc_weekly_style   = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="weekly", group="SMC - MTF Levels")
-smc_weekly_color   = input.color(#2157f3, "", inline="weekly", group="SMC - MTF Levels")
-smc_show_monthly   = input.bool(false, "Monthly", inline="monthly", group="SMC - MTF Levels")
-smc_monthly_style  = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="monthly", group="SMC - MTF Levels")
-smc_monthly_color  = input.color(#2157f3, "", inline="monthly", group="SMC - MTF Levels")
+smc_show_daily     = input.bool(true, "Daily Levels", inline="daily", group="Smart Money Concepts", tooltip="Show previous daily high and low levels")
+smc_daily_style    = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="daily", group="Smart Money Concepts")
+smc_daily_color    = input.color(#000000, "", inline="daily", group="Smart Money Concepts")
+smc_show_weekly    = input.bool(false, "Weekly Levels", inline="weekly", group="Smart Money Concepts", tooltip="Show previous weekly high and low levels")
+smc_weekly_style   = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="weekly", group="Smart Money Concepts")
+smc_weekly_color   = input.color(#000000, "", inline="weekly", group="Smart Money Concepts")
+smc_show_monthly   = input.bool(false, "Monthly Levels", inline="monthly", group="Smart Money Concepts", tooltip="Show previous monthly high and low levels")
+smc_monthly_style  = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="monthly", group="Smart Money Concepts")
+smc_monthly_color  = input.color(#000000, "", inline="monthly", group="Smart Money Concepts")
 
 // --- Settings: Zones ---
 
-smc_show_zones     = input.bool(true, "", inline="pd_toggle", group="SMC - Zones")
-smc_zone_lookback  = input.int(10, "Premium & Discount Lookback Period", minval=5, step=5, inline="pd_toggle", group="SMC - Zones", tooltip="Lookback period for Premium & Discount Levels with Delta Volume")
-smc_discount_color = input.color(#79c1f1, "Discount", inline="zone_col", group="SMC - Zones")
-smc_premium_color  = input.color(#f19579, "Premium", inline="zone_col", group="SMC - Zones")
+smc_show_zones     = input.bool(true, "Premium/Discount Zones", inline="pd_toggle", group="Smart Money Concepts", tooltip="Show lookback-based premium and discount zones with delta volume")
+smc_zone_lookback  = 10  // Lookback period for Premium/Discount zone boundaries
 
 // --- Constants ---
 
@@ -514,13 +511,13 @@ var array<float> pd_highs  = array.new_float(0)
 var array<float> pd_lows   = array.new_float(0)
 var array<float> pd_posVol = array.new_float(0)
 var array<float> pd_negVol = array.new_float(0)
-var float pd_deltaVol      = na
 var box pd_upperBox         = na
 var box pd_lowerBox         = na
 var box pd_midBox            = na
 var line pd_eqLine           = na
+var label pd_eqLabel         = na
 
-smc_atrMeasure = ta.atr(ATR_PERIOD_SWING)
+smc_atrMeasure = ta.atr(SMC_ATR_PERIOD)
 
 // Store price data (capped at SMC_MAX_ARRAY_SIZE to prevent unbounded memory growth)
 smc_highs.push(high)
@@ -630,7 +627,7 @@ smc_drawHighLowSwings() =>
     var label topLabel = label.new(na, na, color=COLOR_TRANSPARENT, textcolor=smc_hl_bear_color, xloc=xloc.bar_time, style=label.style_label_down, size=size.tiny)
     var label bottomLabel = label.new(na, na, color=COLOR_TRANSPARENT, textcolor=smc_hl_bull_color, xloc=xloc.bar_time, style=label.style_label_up, size=size.tiny)
 
-    rightTimeBar = last_bar_time + MTF_TIME_EXTENSION * (time - time[1])
+    rightTimeBar = last_bar_time + SMC_MTF_LINE_EXT * (time - time[1])
 
     topLine.set_first_point(chart.point.new(smc_trail.lastTopTime, na, smc_trail.top))
     topLine.set_second_point(chart.point.new(rightTimeBar, na, smc_trail.top))
@@ -673,7 +670,7 @@ smc_drawLevels(string tf, bool sameTF, string style, color levelColor) =>
     var label topLabel = label.new(na, na, xloc=xloc.bar_time, text=str.format("P{0}H", tf), color=COLOR_TRANSPARENT, textcolor=levelColor, size=size.small, style=label.style_label_left)
     var label bottomLabel = label.new(na, na, xloc=xloc.bar_time, text=str.format("P{0}L", tf), color=COLOR_TRANSPARENT, textcolor=levelColor, size=size.small, style=label.style_label_left)
 
-    rightEdge = last_bar_time + MTF_TIME_EXTENSION * (time - time[1])
+    rightEdge = last_bar_time + SMC_MTF_LINE_EXT * (time - time[1])
 
     topLine.set_first_point(chart.point.new(parsedTopTime, na, parsedTop))
     topLine.set_second_point(chart.point.new(rightEdge, na, parsedTop))
@@ -753,11 +750,6 @@ if show_smc and smc_show_zones and barstate.islast
             pd_posVol.set(i, 0.)
             pd_negVol.set(i, 0.)
 
-    // Calculate delta volume
-    pd_posAvg = pd_posVol.avg()
-    pd_deltaVol := pd_posAvg != 0 ? (pd_negVol.avg() / pd_posAvg + 1) * 100 : 0
-    pd_deltaVol := math.min(math.max(pd_deltaVol, -100), 100)
-
     pd_hiMax = pd_highs.max()
     pd_loMin = pd_lows.min()
 
@@ -766,19 +758,21 @@ if show_smc and smc_show_zones and barstate.islast
     box.delete(pd_lowerBox[1])
     box.delete(pd_midBox[1])
     line.delete(pd_eqLine[1])
+    label.delete(pd_eqLabel[1])
 
     // Premium box (around highest highs)
-    pd_upperBox := box.new(pd_startIdx, pd_hiMax + pd_atr, pd_endIdx, pd_hiMax, smc_premium_color, 1, bgcolor=color.new(smc_premium_color, 100), text="PREMIUM: " + str.tostring(pd_negVol.sum(), format.volume), text_size=size.small, text_color=chart.fg_color, force_overlay=true)
+    pd_upperBox := box.new(pd_startIdx, pd_hiMax + pd_atr, pd_endIdx, pd_hiMax, COLOR_PREMIUM, 1, bgcolor=color.new(COLOR_PREMIUM, 80), text="PREMIUM: " + str.tostring(pd_negVol.sum(), format.volume), text_size=size.small, text_color=chart.fg_color, force_overlay=true)
 
     // Discount box (around lowest lows)
-    pd_lowerBox := box.new(pd_startIdx, pd_loMin, pd_endIdx, pd_loMin - pd_atr, smc_discount_color, 1, bgcolor=color.new(smc_discount_color, 100), text="DISCOUNT: " + str.tostring(pd_posVol.sum(), format.volume), text_size=size.small, text_color=chart.fg_color, force_overlay=true)
+    pd_lowerBox := box.new(pd_startIdx, pd_loMin, pd_endIdx, pd_loMin - pd_atr, COLOR_DISCOUNT, 1, bgcolor=color.new(COLOR_DISCOUNT, 80), text="DISCOUNT: " + str.tostring(pd_posVol.sum(), format.volume), text_size=size.small, text_color=chart.fg_color, force_overlay=true)
+
+    // Mid-zone background fill (between premium and discount)
+    pd_midBox := box.new(pd_startIdx, pd_hiMax, pd_endIdx, pd_loMin, na, 0, bgcolor=color.new(COLOR_NEUTRAL, 93))
 
     // Equilibrium line (true 0.5)
     pd_eqLevel = math.avg(pd_loMin, pd_hiMax)
     pd_eqLine := line.new(pd_startIdx, pd_eqLevel, pd_endIdx, pd_eqLevel, color=chart.fg_color, style=line.style_dashed)
-
-    // Mid-zone box with delta volume
-    pd_midBox := box.new(pd_startIdx, pd_hiMax, pd_endIdx, pd_loMin, na, 0, bgcolor=color.new(pd_deltaVol > 0 ? smc_discount_color : smc_premium_color, 93), text="Delta Volume\n" + str.tostring(pd_deltaVol, format.percent), text_size=size.normal, text_color=pd_deltaVol > 0 ? smc_discount_color : smc_premium_color, text_halign=text.align_right, text_valign=text.align_bottom)
+    pd_eqLabel := label.new(pd_endIdx, pd_eqLevel, "Equilibrium", style=label.style_label_left, color=COLOR_TRANSPARENT, textcolor=chart.fg_color, size=size.small)
 
 // ============================================================================
 //                    MODULE: ChoCH / BOS (Market Structure)
@@ -787,7 +781,7 @@ if show_smc and smc_show_zones and barstate.islast
 
 // --- Settings ---
 
-cb_length  = input.int(1, "Pivot Length", minval=1, group='ChoCH / BOS')
+cb_length  = input.int(1, "Pivot Length", minval=1, group='ChoCH / BOS', tooltip="Lookback bars for detecting swing pivots used in CHoCH/BOS detection")
 cb_bullCss = input.color(color.new(#22ab94, 0), "Bullish", group='ChoCH / BOS', inline='cb_bull')
 cb_bearCss = input.color(color.new(#f7525f, 0), "Bearish", group='ChoCH / BOS', inline='cb_bear')
 
@@ -853,15 +847,20 @@ bool alert_choch_bear = cb_os == -1 and cb_os[1] != -1
 
 // --- Settings ---
 
-ict_mode     = input.string('Present', "Mode", options=['Present', 'Historical'], group='Fair Value Gaps')
+ict_mode     = input.string('Present', "Mode", options=['Present', 'Historical'], group='Fair Value Gaps', tooltip="Present shows FVGs from recent bars only, Historical shows all")
 ict_FVG_type = input.string('FVG', "Type", group='Fair Value Gaps', options=['FVG', 'IFVG'],
-               tooltip='Fair Value Gaps or Implied Fair Value Gaps')
-ict_visBxs   = input.int(1, "# Visible FVG's", group='Fair Value Gaps',
-               minval=1, maxval=20, tooltip='In the same direction')
+               tooltip='FVG detects true gaps, IFVG detects implied gaps where body did not fill')
+ict_visBxs   = input.int(1, "Visible FVGs", group='Fair Value Gaps',
+               minval=1, maxval=20, tooltip='Maximum number of FVG boxes to display per direction')
 ict_cFVGbl   = input.color(color.new(#22ab94, 0), "Bullish FVG  ", group='Fair Value Gaps', inline='FVGbl')
 ict_cFVGblBR = input.color(color.new(#22ab94, 50), "Break", group='Fair Value Gaps', inline='FVGbl')
 ict_cFVGbr   = input.color(color.new(#f7525f, 0), "Bearish FVG ", group='Fair Value Gaps', inline='FVGbr')
 ict_cFVGbrBR = input.color(color.new(#f7525f, 50), "Break", group='Fair Value Gaps', inline='FVGbr')
+
+// Exposed constants
+fvg_body_threshold  = input.float(0.36, "Body Threshold", minval=0.1, maxval=0.8, step=0.01, group="Fair Value Gaps", tooltip="Minimum body-to-range ratio for a candle to qualify as an FVG candle")
+fvg_break_lookback  = input.int(10, "Break Lookback", minval=1, maxval=50, group="Fair Value Gaps", tooltip="Maximum number of FVG boxes to check for break detection each bar")
+fvg_extension_bars  = input.int(8, "Extension Bars", minval=1, maxval=50, group="Fair Value Gaps", tooltip="Number of bars to extend FVG boxes forward from their formation")
 
 // --- Types ---
 
@@ -884,7 +883,7 @@ var ict_FVG[] ict_bFVG_DN = array.new<ict_FVG>()
 // --- Execution: Fair Value Gaps ---
 
 // Candle analysis for FVG
-ict_L_body   = high - ict_mx < ict_body * FVG_BODY_THRESHOLD and ict_mn - low < ict_body * FVG_BODY_THRESHOLD
+ict_L_body   = high - ict_mx < ict_body * fvg_body_threshold and ict_mn - low < ict_body * fvg_body_threshold
 ict_L_bodyUP = ict_body > ict_meanBody and ict_L_body and close > open
 ict_L_bodyDN = ict_body > ict_meanBody and ict_L_body and close < open
 
@@ -902,7 +901,7 @@ if barstate.isfirst
 if ict_imbalanceUP and ict_per and show_fvg
     if ict_imbalanceUP[1]
         ict_bFVG_UP.get(0).bx.set_lefttop(bar_index - 2, low)
-        ict_bFVG_UP.get(0).bx.set_rightbottom(bar_index + FVG_EXTENSION_BARS, high[2])
+        ict_bFVG_UP.get(0).bx.set_rightbottom(bar_index + fvg_extension_bars, high[2])
     else
         ict_bFVG_UP.unshift(ict_FVG.new(
           box.new(
@@ -921,7 +920,7 @@ if ict_imbalanceUP and ict_per and show_fvg
 if ict_imbalanceDN and ict_per and show_fvg
     if ict_imbalanceDN[1]
         ict_bFVG_DN.get(0).bx.set_lefttop(bar_index - 2, low[2])
-        ict_bFVG_DN.get(0).bx.set_rightbottom(bar_index + FVG_EXTENSION_BARS, high)
+        ict_bFVG_DN.get(0).bx.set_rightbottom(bar_index + fvg_extension_bars, high)
     else
         ict_bFVG_DN.unshift(ict_FVG.new(
           box.new(
@@ -937,20 +936,20 @@ if ict_imbalanceDN and ict_per and show_fvg
         ict_bFVG_DN.pop().bx.delete()
 
 // FVG break detection
-for i = 0 to math.min(FVG_BREAK_LOOKBACK, ict_bFVG_UP.size() - 1)
+for i = 0 to math.min(fvg_break_lookback, ict_bFVG_UP.size() - 1)
     getUPi = ict_bFVG_UP.get(i)
     if getUPi.active
-        getUPi.bx.set_right(bar_index + FVG_EXTENSION_BARS)
+        getUPi.bx.set_right(bar_index + fvg_extension_bars)
         if low < getUPi.bx.get_top()
             getUPi.bx.set_border_style(line.style_dashed)
         if low < getUPi.bx.get_bottom()
             getUPi.bx.delete()
             getUPi.active := false
 
-for i = 0 to math.min(FVG_BREAK_LOOKBACK, ict_bFVG_DN.size() - 1)
+for i = 0 to math.min(fvg_break_lookback, ict_bFVG_DN.size() - 1)
     getDNi = ict_bFVG_DN.get(i)
     if getDNi.active
-        getDNi.bx.set_right(bar_index + FVG_EXTENSION_BARS)
+        getDNi.bx.set_right(bar_index + fvg_extension_bars)
         if high > getDNi.bx.get_bottom()
             getDNi.bx.set_border_style(line.style_dashed)
         if high > getDNi.bx.get_top()
@@ -968,7 +967,7 @@ fvg_active_bear_btm = float(na)
 fvg_is_bull_broken  = false
 fvg_is_bear_broken  = false
 
-for i = 0 to math.min(FVG_BREAK_LOOKBACK, ict_bFVG_UP.size() - 1)
+for i = 0 to math.min(fvg_break_lookback, ict_bFVG_UP.size() - 1)
     bxi = ict_bFVG_UP.get(i)
     if bxi.active
         if not fvg_has_active_bull
@@ -978,7 +977,7 @@ for i = 0 to math.min(FVG_BREAK_LOOKBACK, ict_bFVG_UP.size() - 1)
         if low < bxi.bx.get_bottom()
             fvg_is_bull_broken := true
 
-for i = 0 to math.min(FVG_BREAK_LOOKBACK, ict_bFVG_DN.size() - 1)
+for i = 0 to math.min(fvg_break_lookback, ict_bFVG_DN.size() - 1)
     bxi = ict_bFVG_DN.get(i)
     if bxi.active
         if not fvg_has_active_bear
@@ -998,11 +997,12 @@ alert_fvg_bear_break = fvg_is_bear_broken and not fvg_is_bear_broken[1]
 
 // --- Settings ---
 
-liq_topCss     = input.color(#f7525f, "Swing High", inline="liq_top", group='Liquidity Swings')
-liq_topAreaCss = input.color(color.new(#f7525f, 50), "Area", inline="liq_top", group='Liquidity Swings')
-liq_btmCss     = input.color(#22ab94, "Swing Low", inline="liq_btm", group='Liquidity Swings')
-liq_btmAreaCss = input.color(color.new(#22ab94, 50), "Area", inline="liq_btm", group='Liquidity Swings')
-liq_labelSize  = input.string('Tiny', 'Labels Size', options=['Tiny', 'Small', 'Normal'], group='Liquidity Swings')
+liq_swing_length = input.int(14, "Pivot Length", minval=3, maxval=50, group="Liquidity Swings", tooltip="Lookback bars for detecting swing pivots used as liquidity levels")
+liq_topCss       = input.color(#f7525f, "Swing High", inline="liq_top", group='Liquidity Swings')
+liq_topAreaCss   = input.color(color.new(#f7525f, 50), "Area", inline="liq_top", group='Liquidity Swings')
+liq_btmCss       = input.color(#22ab94, "Swing Low", inline="liq_btm", group='Liquidity Swings')
+liq_btmAreaCss   = input.color(color.new(#22ab94, 50), "Area", inline="liq_btm", group='Liquidity Swings')
+liq_labelSize    = input.string('Tiny', 'Labels Size', options=['Tiny', 'Small', 'Normal'], group='Liquidity Swings', tooltip="Size of labels showing sweep volume")
 
 // --- Variables ---
 
@@ -1031,8 +1031,8 @@ liq_get_counts(bool is_pivot, float top, float btm) =>
         count := 0
         vol := 0.
     else
-        vol += low[LIQ_SWING_LENGTH] < top and high[LIQ_SWING_LENGTH] > btm ? volume[LIQ_SWING_LENGTH] : 0
-        count += low[LIQ_SWING_LENGTH] < top and high[LIQ_SWING_LENGTH] > btm ? 1 : 0
+        vol += low[liq_swing_length] < top and high[liq_swing_length] > btm ? volume[liq_swing_length] : 0
+        count += low[liq_swing_length] < top and high[liq_swing_length] > btm ? 1 : 0
     [count, vol]
 
 liq_set_label(count, vol, x, y, css, lbl_style) =>
@@ -1054,9 +1054,9 @@ liq_set_level(bool is_pivot, bool crossed, float value, count, css) =>
         if count[1] < 0
             line.delete(lvl[1])
         else if not crossed[1]
-            line.set_x2(lvl, bar_index - LIQ_SWING_LENGTH)
+            line.set_x2(lvl, bar_index - liq_swing_length)
         line.delete(lvl)
-        lvl := line.new(bar_index - LIQ_SWING_LENGTH, value, bar_index, value, color = na)
+        lvl := line.new(bar_index - liq_swing_length, value, bar_index, value, color = na)
     if not crossed[1]
         line.set_x2(lvl, bar_index + 3)
     if crossed and not crossed[1]
@@ -1077,8 +1077,8 @@ liq_set_zone(bool is_pivot, int x, float top, float btm, count, css) =>
 
 // --- Execution ---
 
-liq_ph = ta.pivothigh(LIQ_SWING_LENGTH, LIQ_SWING_LENGTH)
-liq_pl = ta.pivotlow(LIQ_SWING_LENGTH, LIQ_SWING_LENGTH)
+liq_ph = ta.pivothigh(liq_swing_length, liq_swing_length)
+liq_pl = ta.pivotlow(liq_swing_length, liq_swing_length)
 
 // Pivot high counts
 [liq_ph_count, liq_ph_vol] = liq_get_counts(not na(liq_ph), liq_ph_top, liq_ph_btm)
@@ -1086,9 +1086,9 @@ liq_pl = ta.pivotlow(LIQ_SWING_LENGTH, LIQ_SWING_LENGTH)
 // Pivot high data update
 if show_liq
     if not na(liq_ph)
-        liq_ph_top := high[LIQ_SWING_LENGTH]
-        liq_ph_btm := math.max(close[LIQ_SWING_LENGTH], open[LIQ_SWING_LENGTH])
-        liq_ph_x1 := bar_index - LIQ_SWING_LENGTH
+        liq_ph_top := high[liq_swing_length]
+        liq_ph_btm := math.max(close[liq_swing_length], open[liq_swing_length])
+        liq_ph_x1 := bar_index - liq_swing_length
         liq_ph_crossed := false
     else
         liq_ph_crossed := close > liq_ph_top ? true : liq_ph_crossed
@@ -1114,9 +1114,9 @@ if show_liq
 // Pivot low data update
 if show_liq
     if not na(liq_pl)
-        liq_pl_top := math.min(close[LIQ_SWING_LENGTH], open[LIQ_SWING_LENGTH])
-        liq_pl_btm := low[LIQ_SWING_LENGTH]
-        liq_pl_x1 := bar_index - LIQ_SWING_LENGTH
+        liq_pl_top := math.min(close[liq_swing_length], open[liq_swing_length])
+        liq_pl_btm := low[liq_swing_length]
+        liq_pl_x1 := bar_index - liq_swing_length
         liq_pl_crossed := false
     else
         liq_pl_crossed := close < liq_pl_btm ? true : liq_pl_crossed
@@ -1148,23 +1148,24 @@ alert_sweep_low  = liq_pl_crossed and not liq_pl_crossed[1]
 
 // --- Settings ---
 
-cp_trend_length = input.int(14, "Trend Length", minval=0, group="Candlestick Patterns")
+cp_trend_length = 14   // Stochastic period for trend context
+cp_atr_period   = 20   // ATR period for pattern body threshold
 
-cp_show_hammer   = input.bool(true, "Hammer", group="Candlestick Patterns")
-cp_show_ihammer  = input.bool(true, "Inverted Hammer", group="Candlestick Patterns")
-cp_show_shooting = input.bool(true, "Shooting Star", group="Candlestick Patterns")
-cp_show_hanging  = input.bool(true, "Hanging Man", group="Candlestick Patterns")
-cp_show_bulleng  = input.bool(true, "Bullish Engulfing", group="Candlestick Patterns")
-cp_show_beareng  = input.bool(true, "Bearish Engulfing", group="Candlestick Patterns")
-cp_show_wm       = input.bool(true, "White Marubozu", group="Candlestick Patterns")
-cp_show_bm       = input.bool(true, "Black Marubozu", group="Candlestick Patterns")
+cp_show_hammer   = input.bool(true, "Hammer", group="Candlestick Patterns", tooltip="Bullish reversal — long lower wick, small body, appears in downtrend")
+cp_show_ihammer  = input.bool(true, "Inverted Hammer", group="Candlestick Patterns", tooltip="Bullish reversal — long upper wick, small body, appears in downtrend")
+cp_show_shooting = input.bool(true, "Shooting Star", group="Candlestick Patterns", tooltip="Bearish reversal — long upper wick, small body, appears in uptrend")
+cp_show_hanging  = input.bool(true, "Hanging Man", group="Candlestick Patterns", tooltip="Bearish reversal — long lower wick, small body, appears in uptrend")
+cp_show_bulleng  = input.bool(true, "Bullish Engulfing", group="Candlestick Patterns", tooltip="Bullish reversal — large green candle fully engulfs prior red candle")
+cp_show_beareng  = input.bool(true, "Bearish Engulfing", group="Candlestick Patterns", tooltip="Bearish reversal — large red candle fully engulfs prior green candle")
+cp_show_wm       = input.bool(true, "White Marubozu", group="Candlestick Patterns", tooltip="Strong bullish — large green candle with minimal wicks")
+cp_show_bm       = input.bool(true, "Black Marubozu", group="Candlestick Patterns", tooltip="Strong bearish — large red candle with minimal wicks")
 
 cp_bull_color = input.color(#22ab94, "Bullish Color", inline="cp_col", group="Candlestick Patterns")
 cp_bear_color = input.color(#f7525f, "Bearish Color", inline="cp_col", group="Candlestick Patterns")
 
 // --- Variables / Functions ---
 
-cp_atr = ta.atr(ATR_PERIOD_PATTERN) / 2
+cp_atr = ta.atr(cp_atr_period) / 2
 cp_st = ta.stoch(close, close, close, cp_trend_length)
 cp_downtrend = cp_st < 50
 cp_uptrend = cp_st > 50
@@ -1321,6 +1322,11 @@ conf_tbl_pos = switch conf_tbl_position
     "Bottom Right" => position.bottom_right
     "Bottom Left"  => position.bottom_left
 
+conf_size = switch conf_tbl_size
+    "Tiny"   => size.tiny
+    "Small"  => size.small
+    "Normal" => size.normal
+
 // --- Scoring ---
 conf_bull_count = (bias_w == 1 ? 1 : 0) + (bias_d == 1 ? 1 : 0) + (bias_4h == 1 ? 1 : 0) + (bias_1h == 1 ? 1 : 0) + (ema_w == 1 ? 1 : 0) + (ema_d == 1 ? 1 : 0) + (ema_4h == 1 ? 1 : 0) + (ema_1h == 1 ? 1 : 0)
 conf_bear_count = (bias_w == -1 ? 1 : 0) + (bias_d == -1 ? 1 : 0) + (bias_4h == -1 ? 1 : 0) + (bias_1h == -1 ? 1 : 0) + (ema_w == -1 ? 1 : 0) + (ema_d == -1 ? 1 : 0) + (ema_4h == -1 ? 1 : 0) + (ema_1h == -1 ? 1 : 0)
@@ -1350,51 +1356,51 @@ if show_confluence_table and barstate.islast
 
     if conf_show_details
         // Header row
-        table.cell(conf_tbl, 0, row, "",        text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, "CHoCH",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip="Change of Character - structure direction")
-        table.cell(conf_tbl, 2, row, "EMA",     text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip="EMA 50/100/200 alignment")
+        table.cell(conf_tbl, 0, row, "",        text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, "CHoCH",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Change of Character - structure direction")
+        table.cell(conf_tbl, 2, row, "EMA",     text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="EMA 50/100/200 alignment")
         row += 1
 
         // Weekly
-        table.cell(conf_tbl, 0, row, "Weekly",  text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, conf_arrow(bias_w), text_color=bias_color(bias_w), text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("W", bias_w))
-        table.cell(conf_tbl, 2, row, conf_arrow(ema_w),  text_color=bias_color(ema_w),  text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("W", ema_w))
+        table.cell(conf_tbl, 0, row, "Weekly",  text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_arrow(bias_w), text_color=bias_color(bias_w), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("W", bias_w))
+        table.cell(conf_tbl, 2, row, conf_arrow(ema_w),  text_color=bias_color(ema_w),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("W", ema_w))
         row += 1
 
         // Daily
-        table.cell(conf_tbl, 0, row, "Daily",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, conf_arrow(bias_d), text_color=bias_color(bias_d), text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("D", bias_d))
-        table.cell(conf_tbl, 2, row, conf_arrow(ema_d),  text_color=bias_color(ema_d),  text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("D", ema_d))
+        table.cell(conf_tbl, 0, row, "Daily",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_arrow(bias_d), text_color=bias_color(bias_d), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("D", bias_d))
+        table.cell(conf_tbl, 2, row, conf_arrow(ema_d),  text_color=bias_color(ema_d),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("D", ema_d))
         row += 1
 
         // 4H
-        table.cell(conf_tbl, 0, row, "4H",      text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, conf_arrow(bias_4h), text_color=bias_color(bias_4h), text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("4H", bias_4h))
-        table.cell(conf_tbl, 2, row, conf_arrow(ema_4h),  text_color=bias_color(ema_4h),  text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("4H", ema_4h))
+        table.cell(conf_tbl, 0, row, "4H",      text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_arrow(bias_4h), text_color=bias_color(bias_4h), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("4H", bias_4h))
+        table.cell(conf_tbl, 2, row, conf_arrow(ema_4h),  text_color=bias_color(ema_4h),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("4H", ema_4h))
         row += 1
 
         // 1H
-        table.cell(conf_tbl, 0, row, "1H",      text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, conf_arrow(bias_1h), text_color=bias_color(bias_1h), text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("1H", bias_1h))
-        table.cell(conf_tbl, 2, row, conf_arrow(ema_1h),  text_color=bias_color(ema_1h),  text_size=size.small, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("1H", ema_1h))
+        table.cell(conf_tbl, 0, row, "1H",      text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_arrow(bias_1h), text_color=bias_color(bias_1h), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("1H", bias_1h))
+        table.cell(conf_tbl, 2, row, conf_arrow(ema_1h),  text_color=bias_color(ema_1h),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("1H", ema_1h))
         row += 1
 
         // Session row
-        table.cell(conf_tbl, 0, row, "Session", text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, row, conf_ses_text, text_color=conf_session_active ? COLOR_BULL : COLOR_NEUTRAL, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 2, row, "",         text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 0, row, "Session", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_ses_text, text_color=conf_session_active ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 2, row, "",         text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
     // Direction row (always visible)
-    table.cell(conf_tbl, 0, row, "Direction",    text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 1, row, conf_dir_text,  text_color=conf_dir_color, text_size=size.normal, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 0, row, "Direction",    text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 1, row, conf_dir_text,  text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
     row += 1
 
     // Confluence score row (always visible)
-    table.cell(conf_tbl, 0, row, "Confluence",   text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 1, row, str.tostring(conf_score) + "/9", text_color=conf_dir_color, text_size=size.normal, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=size.small, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 0, row, "Confluence",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 1, row, str.tostring(conf_score) + "/9", text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 2, row, "",              text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
 
 // --- Confluence Alert ---
 conf_score_meets = conf_score >= conf_alert_threshold
