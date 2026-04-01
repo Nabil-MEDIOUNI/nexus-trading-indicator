@@ -1351,7 +1351,7 @@ conf_score = conf_w_score + conf_d_score + conf_4h_score + conf_1h_score
 // Count aligned directions
 conf_bull_align = (conf_wd_aligned and bias_w == 1 ? 1 : 0) + (conf_d4h_aligned and bias_d == 1 ? 1 : 0) + (conf_4h1h_aligned and bias_4h == 1 ? 1 : 0)
 conf_bear_align = (conf_wd_aligned and bias_w == -1 ? 1 : 0) + (conf_d4h_aligned and bias_d == -1 ? 1 : 0) + (conf_4h1h_aligned and bias_4h == -1 ? 1 : 0)
-conf_direction = conf_bull_align > conf_bear_align ? 1 : conf_bear_align > conf_bull_align ? -1 : 0
+conf_direction = conf_bull_align >= 2 ? 1 : conf_bear_align >= 2 ? -1 : 0
 
 conf_dir_text = conf_direction == 1 ? "LONG ▲" : conf_direction == -1 ? "SHORT ▼" : "NEUTRAL"
 conf_dir_color = conf_direction == 1 ? COLOR_BULL : conf_direction == -1 ? COLOR_BEAR : COLOR_NEUTRAL
@@ -1428,18 +1428,26 @@ fvg_dir_label = fvg_in_bull ? "bullish" : fvg_in_bear ? "bearish" : ""
 fvg_entry_top = fvg_in_4h_bull ? fvg_4h_bull_top : fvg_in_4h_bear ? fvg_4h_bear_top : fvg_in_1h_bull ? fvg_1h_bull_top : fvg_in_1h_bear ? fvg_1h_bear_top : fvg_in_15m_bull ? fvg_15m_bull_top : fvg_in_15m_bear ? fvg_15m_bear_top : na
 fvg_entry_btm = fvg_in_4h_bull ? fvg_4h_bull_btm : fvg_in_4h_bear ? fvg_4h_bear_btm : fvg_in_1h_bull ? fvg_1h_bull_btm : fvg_in_1h_bear ? fvg_1h_bear_btm : fvg_in_15m_bull ? fvg_15m_bull_btm : fvg_in_15m_bear ? fvg_15m_bear_btm : na
 
-// --- LTF CHoCH for Entry Confirmation ---
-entry_choch_1m  = request.security(syminfo.tickerid, "1",  bias_choch()[1], lookahead=barmerge.lookahead_on)
-entry_choch_5m  = request.security(syminfo.tickerid, "5",  bias_choch()[1], lookahead=barmerge.lookahead_on)
-entry_choch_15m = request.security(syminfo.tickerid, "15", bias_choch()[1], lookahead=barmerge.lookahead_on)
+// --- LTF CHoCH + EMA for Entry Confirmation ---
+[entry_choch_15m, entry_ema_15m] = request.security(syminfo.tickerid, "15", bias_combined_confirmed(), lookahead=barmerge.lookahead_on)
+[entry_choch_5m,  entry_ema_5m]  = request.security(syminfo.tickerid, "5",  bias_combined_confirmed(), lookahead=barmerge.lookahead_on)
+[entry_choch_1m,  entry_ema_1m]  = request.security(syminfo.tickerid, "1",  bias_combined_confirmed(), lookahead=barmerge.lookahead_on)
 
 // LTF CHoCH matches confluence direction?
-entry_1m_ok  = (conf_direction == 1 and entry_choch_1m == 1) or (conf_direction == -1 and entry_choch_1m == -1)
-entry_5m_ok  = (conf_direction == 1 and entry_choch_5m == 1) or (conf_direction == -1 and entry_choch_5m == -1)
-entry_15m_ok = (conf_direction == 1 and entry_choch_15m == 1) or (conf_direction == -1 and entry_choch_15m == -1)
+entry_15m_choch_ok = (conf_direction == 1 and entry_choch_15m == 1) or (conf_direction == -1 and entry_choch_15m == -1)
+entry_15m_ema_ok   = (conf_direction == 1 and entry_ema_15m == 1) or (conf_direction == -1 and entry_ema_15m == -1)
+entry_15m_score    = (entry_15m_choch_ok ? 1 : 0) + (entry_15m_ema_ok ? 1 : 0)
 
-// Entry score (max 4)
-entry_score = (entry_at_fvg ? 1 : 0) + (entry_1m_ok ? 1 : 0) + (entry_5m_ok ? 1 : 0) + (entry_15m_ok ? 1 : 0)
+entry_5m_choch_ok = (conf_direction == 1 and entry_choch_5m == 1) or (conf_direction == -1 and entry_choch_5m == -1)
+entry_5m_ema_ok   = (conf_direction == 1 and entry_ema_5m == 1) or (conf_direction == -1 and entry_ema_5m == -1)
+entry_5m_score    = (entry_5m_choch_ok ? 1 : 0) + (entry_5m_ema_ok ? 1 : 0)
+
+entry_1m_choch_ok = (conf_direction == 1 and entry_choch_1m == 1) or (conf_direction == -1 and entry_choch_1m == -1)
+entry_1m_ema_ok   = (conf_direction == 1 and entry_ema_1m == 1) or (conf_direction == -1 and entry_ema_1m == -1)
+entry_1m_score    = (entry_1m_choch_ok ? 1 : 0) + (entry_1m_ema_ok ? 1 : 0)
+
+// Entry score: FVG (0-1) + 15m (0-2) + 5m (0-2) + 1m (0-2) = max 7
+entry_score = (entry_at_fvg ? 1 : 0) + entry_15m_score + entry_5m_score + entry_1m_score
 
 // Session label (no score) — fetched from 1m via request.security for accuracy on all TFs
 conf_ses_detect() =>
@@ -1453,7 +1461,7 @@ conf_ses_detect() =>
 conf_ses_text = conf_is_ny and conf_is_ldn ? "London / NY" : conf_is_ny ? "New York" : conf_is_ldn ? "London" : conf_is_asia ? "Asia" : "Off Hours"
 
 // --- Table Drawing ---
-var table conf_tbl = table.new(conf_tbl_pos, 4, 18, border_width=1, border_color=COLOR_TABLE_BORDER, bgcolor=COLOR_TABLE_BG, frame_width=1, frame_color=COLOR_TABLE_BORDER)
+var table conf_tbl = table.new(conf_tbl_pos, 4, 20, border_width=1, border_color=COLOR_TABLE_BORDER, bgcolor=COLOR_TABLE_BG, frame_width=1, frame_color=COLOR_TABLE_BORDER)
 
 if show_confluence_table and barstate.islast
     int row = 0
@@ -1475,35 +1483,35 @@ if show_confluence_table and barstate.islast
         table.cell(conf_tbl, 3, row, "Score",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // Weekly (max 1: match only)
+        // Weekly
         table.cell(conf_tbl, 0, row, "Weekly",  text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_arrow(bias_w), text_color=bias_color(bias_w), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("W", bias_w))
         table.cell(conf_tbl, 2, row, conf_arrow(ema_w),  text_color=bias_color(ema_w),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("W", ema_w))
         table.cell(conf_tbl, 3, row, str.tostring(conf_w_score) + "/1", text_color=conf_w_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // Daily (max 2: match + W→D aligned)
+        // Daily
         table.cell(conf_tbl, 0, row, "Daily",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_arrow(bias_d), text_color=bias_color(bias_d), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("D", bias_d))
         table.cell(conf_tbl, 2, row, conf_arrow(ema_d),  text_color=bias_color(ema_d),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("D", ema_d))
         table.cell(conf_tbl, 3, row, str.tostring(conf_d_score) + "/2", text_color=conf_d_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // 4H (max 2: match + D→4H aligned)
+        // 4H
         table.cell(conf_tbl, 0, row, "4H",      text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_arrow(bias_4h), text_color=bias_color(bias_4h), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("4H", bias_4h))
         table.cell(conf_tbl, 2, row, conf_arrow(ema_4h),  text_color=bias_color(ema_4h),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("4H", ema_4h))
         table.cell(conf_tbl, 3, row, str.tostring(conf_4h_score) + "/2", text_color=conf_4h_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // 1H (max 2: match + 4H→1H aligned)
+        // 1H
         table.cell(conf_tbl, 0, row, "1H",      text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_arrow(bias_1h), text_color=bias_color(bias_1h), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("1H", bias_1h))
         table.cell(conf_tbl, 2, row, conf_arrow(ema_1h),  text_color=bias_color(ema_1h),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("1H", ema_1h))
         table.cell(conf_tbl, 3, row, str.tostring(conf_1h_score) + "/2", text_color=conf_1h_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // Session (full-width: label col 0, session text spans cols 1-3)
+        // Session (full-width)
         int ses_row = row
         table.cell(conf_tbl, 0, ses_row, "Session", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, ses_row, conf_ses_text, text_color=(conf_is_ny or conf_is_ldn or conf_is_asia) ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
@@ -1512,7 +1520,17 @@ if show_confluence_table and barstate.islast
         table.merge_cells(conf_tbl, 1, ses_row, 3, ses_row)
         row += 1
 
-        // === ENTRY CHECKLIST === (full-width header)
+        // Confluence score (below session, white text like title — no color)
+        int conf_score_row = row
+        conf_score_tip = str.tostring(conf_bull_align + conf_bear_align) + " cross-TF alignments + " + str.tostring(conf_score - conf_bull_align - conf_bear_align) + " same-TF matches"
+        table.cell(conf_tbl, 0, conf_score_row, "Confluence", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=conf_score_tip)
+        table.cell(conf_tbl, 1, conf_score_row, str.tostring(conf_score) + "/7", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=conf_score_tip)
+        table.cell(conf_tbl, 2, conf_score_row, "", bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, conf_score_row, "", bgcolor=COLOR_TABLE_BG)
+        table.merge_cells(conf_tbl, 1, conf_score_row, 3, conf_score_row)
+        row += 1
+
+        // === ENTRY SECTION TITLE ===
         int entry_hdr_row = row
         table.cell(conf_tbl, 0, entry_hdr_row, "ENTRY", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, entry_hdr_row, "", bgcolor=COLOR_TABLE_BG)
@@ -1521,7 +1539,38 @@ if show_confluence_table and barstate.islast
         table.merge_cells(conf_tbl, 0, entry_hdr_row, 3, entry_hdr_row)
         row += 1
 
-        // FVG Zone
+        // Entry header (CHoCH + EMA + Score)
+        table.cell(conf_tbl, 0, row, "",        text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, "CHoCH",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Change of Character on lower timeframe")
+        table.cell(conf_tbl, 2, row, "EMA",     text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="EMA 50/100/200 alignment on lower timeframe")
+        table.cell(conf_tbl, 3, row, "Score",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        row += 1
+
+        // 15m
+        choch_15m_tip = entry_15m_choch_ok ? "15m structure aligned with " + conf_dir_text : entry_choch_15m == 0 ? "15m no change of character" : "15m structure conflicting with " + conf_dir_text
+        table.cell(conf_tbl, 0, row, "15m",     text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_arrow(entry_choch_15m), text_color=bias_color(entry_choch_15m), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_15m_tip)
+        table.cell(conf_tbl, 2, row, conf_arrow(entry_ema_15m),  text_color=bias_color(entry_ema_15m),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("15m", entry_ema_15m))
+        table.cell(conf_tbl, 3, row, str.tostring(entry_15m_score) + "/2", text_color=entry_15m_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        row += 1
+
+        // 5m
+        choch_5m_tip = entry_5m_choch_ok ? "5m structure aligned with " + conf_dir_text : entry_choch_5m == 0 ? "5m no change of character" : "5m structure conflicting with " + conf_dir_text
+        table.cell(conf_tbl, 0, row, "5m",      text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_arrow(entry_choch_5m), text_color=bias_color(entry_choch_5m), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_5m_tip)
+        table.cell(conf_tbl, 2, row, conf_arrow(entry_ema_5m),  text_color=bias_color(entry_ema_5m),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("5m", entry_ema_5m))
+        table.cell(conf_tbl, 3, row, str.tostring(entry_5m_score) + "/2", text_color=entry_5m_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        row += 1
+
+        // 1m
+        choch_1m_tip = entry_1m_choch_ok ? "1m structure aligned with " + conf_dir_text : entry_choch_1m == 0 ? "1m no change of character" : "1m structure conflicting with " + conf_dir_text
+        table.cell(conf_tbl, 0, row, "1m",      text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, row, conf_arrow(entry_choch_1m), text_color=bias_color(entry_choch_1m), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_1m_tip)
+        table.cell(conf_tbl, 2, row, conf_arrow(entry_ema_1m),  text_color=bias_color(entry_ema_1m),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("1m", entry_ema_1m))
+        table.cell(conf_tbl, 3, row, str.tostring(entry_1m_score) + "/2", text_color=entry_1m_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        row += 1
+
+        // FVG Zone (last in entry section)
         int fvg_row = row
         fvg_status = entry_at_fvg ? "At " + fvg_tf_label + " FVG" : "Not yet"
         fvg_tip = entry_at_fvg ? "Price inside " + fvg_dir_label + " " + fvg_tf_label + " FVG (" + str.tostring(fvg_entry_btm, format.mintick) + " - " + str.tostring(fvg_entry_top, format.mintick) + ")" : "No active FVG near current price on 15m, 1H, or 4H"
@@ -1530,36 +1579,6 @@ if show_confluence_table and barstate.islast
         table.cell(conf_tbl, 2, fvg_row, "", bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 3, fvg_row, entry_at_fvg ? "+1" : "0", text_color=entry_at_fvg ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.merge_cells(conf_tbl, 1, fvg_row, 2, fvg_row)
-        row += 1
-
-        // 1m CHoCH
-        int choch_1m_row = row
-        choch_1m_tip = entry_1m_ok ? "1m structure " + (entry_choch_1m == 1 ? "bullish" : "bearish") + " - aligned with " + conf_dir_text : entry_choch_1m == 0 ? "1m has no change of character - waiting for structure shift" : "1m structure " + (entry_choch_1m == 1 ? "bullish" : "bearish") + " - conflicting with " + conf_dir_text
-        table.cell(conf_tbl, 0, choch_1m_row, "1m CHoCH", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_1m_tip)
-        table.cell(conf_tbl, 1, choch_1m_row, conf_arrow(entry_choch_1m), text_color=bias_color(entry_choch_1m), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_1m_tip)
-        table.cell(conf_tbl, 2, choch_1m_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, choch_1m_row, entry_1m_ok ? "+1" : "0", text_color=entry_1m_ok ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.merge_cells(conf_tbl, 1, choch_1m_row, 2, choch_1m_row)
-        row += 1
-
-        // 5m CHoCH
-        int choch_5m_row = row
-        choch_5m_tip = entry_5m_ok ? "5m structure " + (entry_choch_5m == 1 ? "bullish" : "bearish") + " - aligned with " + conf_dir_text : entry_choch_5m == 0 ? "5m has no change of character - waiting for structure shift" : "5m structure " + (entry_choch_5m == 1 ? "bullish" : "bearish") + " - conflicting with " + conf_dir_text
-        table.cell(conf_tbl, 0, choch_5m_row, "5m CHoCH", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_5m_tip)
-        table.cell(conf_tbl, 1, choch_5m_row, conf_arrow(entry_choch_5m), text_color=bias_color(entry_choch_5m), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_5m_tip)
-        table.cell(conf_tbl, 2, choch_5m_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, choch_5m_row, entry_5m_ok ? "+1" : "0", text_color=entry_5m_ok ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.merge_cells(conf_tbl, 1, choch_5m_row, 2, choch_5m_row)
-        row += 1
-
-        // 15m CHoCH
-        int choch_15m_row = row
-        choch_15m_tip = entry_15m_ok ? "15m structure " + (entry_choch_15m == 1 ? "bullish" : "bearish") + " - aligned with " + conf_dir_text : entry_choch_15m == 0 ? "15m has no change of character - waiting for structure shift" : "15m structure " + (entry_choch_15m == 1 ? "bullish" : "bearish") + " - conflicting with " + conf_dir_text
-        table.cell(conf_tbl, 0, choch_15m_row, "15m CHoCH", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_15m_tip)
-        table.cell(conf_tbl, 1, choch_15m_row, conf_arrow(entry_choch_15m), text_color=bias_color(entry_choch_15m), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_15m_tip)
-        table.cell(conf_tbl, 2, choch_15m_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, choch_15m_row, entry_15m_ok ? "+1" : "0", text_color=entry_15m_ok ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.merge_cells(conf_tbl, 1, choch_15m_row, 2, choch_15m_row)
         row += 1
 
     // === SUMMARY SECTION TITLE ===
@@ -1571,31 +1590,19 @@ if show_confluence_table and barstate.islast
     table.merge_cells(conf_tbl, 0, sum_title_row, 3, sum_title_row)
     row += 1
 
-    // Confluence score
-    int conf_row = row
-    int conf_cross_tf = (conf_wd_aligned ? 1 : 0) + (conf_d4h_aligned ? 1 : 0) + (conf_4h1h_aligned ? 1 : 0)
-    int conf_same_tf = (conf_w_match ? 1 : 0) + (conf_d_match ? 1 : 0) + (conf_4h_match ? 1 : 0) + (conf_1h_match ? 1 : 0)
-    conf_tip = str.tostring(conf_score) + "/7 - " + str.tostring(conf_cross_tf) + " cross-TF alignments + " + str.tostring(conf_same_tf) + " same-TF matches"
-    table.cell(conf_tbl, 0, conf_row, "Confluence", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=conf_tip)
-    table.cell(conf_tbl, 1, conf_row, str.tostring(conf_score) + "/7", text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=conf_tip)
-    table.cell(conf_tbl, 2, conf_row, "", bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 3, conf_row, "", bgcolor=COLOR_TABLE_BG)
-    table.merge_cells(conf_tbl, 1, conf_row, 3, conf_row)
-    row += 1
-
-    // Entry score
+    // Entry score (white text like title — no color)
     int ent_row = row
-    ent_tip = entry_score == 4 ? "Full entry confirmation: at FVG with all LTF CHoCH aligned" : entry_score == 3 ? "Strong entry: at FVG with partial LTF confirmation" : entry_score >= 1 ? "Partial entry conditions met" : "No entry conditions met"
+    ent_tip = entry_score >= 6 ? "Strong entry: at FVG with LTF confirmation" : entry_score >= 4 ? "Partial entry: some LTF confirmation" : entry_score >= 1 ? "Weak entry conditions" : "No entry conditions met"
     table.cell(conf_tbl, 0, ent_row, "Entry", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ent_tip)
-    table.cell(conf_tbl, 1, ent_row, str.tostring(entry_score) + "/4", text_color=entry_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ent_tip)
+    table.cell(conf_tbl, 1, ent_row, str.tostring(entry_score) + "/7", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ent_tip)
     table.cell(conf_tbl, 2, ent_row, "", bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 3, ent_row, "", bgcolor=COLOR_TABLE_BG)
     table.merge_cells(conf_tbl, 1, ent_row, 3, ent_row)
     row += 1
 
-    // Direction (last - the conclusion)
+    // Direction (last — the conclusion, colored)
     int dir_row = row
-    dir_tip = conf_direction == 1 ? "Bullish: " + str.tostring(conf_bull_align) + " cross-TF alignments favor longs" : conf_direction == -1 ? "Bearish: " + str.tostring(conf_bear_align) + " cross-TF alignments favor shorts" : "No directional bias - cross-TF alignments are balanced"
+    dir_tip = conf_direction == 1 ? "Bullish: " + str.tostring(conf_bull_align) + " cross-TF alignments favor longs" : conf_direction == -1 ? "Bearish: " + str.tostring(conf_bear_align) + " cross-TF alignments favor shorts" : "No clear direction - need 2+ cross-TF alignments to agree"
     table.cell(conf_tbl, 0, dir_row, "Direction", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=dir_tip)
     table.cell(conf_tbl, 1, dir_row, conf_dir_text, text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=dir_tip)
     table.cell(conf_tbl, 2, dir_row, "", bgcolor=COLOR_TABLE_BG)
