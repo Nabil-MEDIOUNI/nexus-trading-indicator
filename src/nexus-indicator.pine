@@ -14,10 +14,10 @@ indicator("Nexus Trading Indicator", shorttitle="NEXUS", overlay=true, max_lines
 // ============================================================================
 
 show_market_structure = input.bool(true, "Market Structure (HH/HL/LH/LL)", group="Module Toggles", tooltip="Show zigzag swing structure with Higher High, Higher Low, Lower High, Lower Low labels")
-show_ema              = input.bool(false, "Triple EMA (50/100/200)", group="Module Toggles", tooltip="Plot three Exponential Moving Averages on the chart")
+show_ema              = input.bool(true, "Triple EMA (50/100/200)", group="Module Toggles", tooltip="Plot three Exponential Moving Averages on the chart")
 show_sessions         = input.bool(true, "Trading Sessions", group="Module Toggles", tooltip="Show New York, London, and Asia session time zones with dividers")
 show_smc              = input.bool(true, "SMC Features", group="Module Toggles", tooltip="Show Smart Money Concepts: swing structure, equal highs/lows, MTF levels, and premium/discount zones")
-show_choch_bos        = input.bool(false, "ChoCH / BOS", group="Module Toggles", tooltip="Show Change of Character and Break of Structure labels when price breaks swing levels")
+show_choch_bos        = input.bool(true, "ChoCH / BOS", group="Module Toggles", tooltip="Show Change of Character and Break of Structure labels when price breaks swing levels")
 show_fvg              = input.bool(true, "Fair Value Gaps (FVG)", group="Module Toggles", tooltip="Show imbalance zones where price gapped over a candle body")
 show_liq              = input.bool(true, "Liquidity Swings", group="Module Toggles", tooltip="Show swing pivot levels and detect when they are swept by price")
 show_candle_patterns  = input.bool(true, "Candlestick Patterns", group="Module Toggles", tooltip="Detect and label reversal and continuation candlestick patterns")
@@ -50,7 +50,6 @@ COLOR_PREMIUM     = #f19579
 SMC_MAX_ARRAY_SIZE = 10000 // Max bars stored for MTF level calculations
 SES_ATR_PERIOD     = 14    // ATR period for session overlap detection
 SES_OVERLAP_MULT   = 0.3   // ATR multiplier for session overlap threshold
-FVG_PRESENT_LIMIT  = 500   // Bars back to scan for FVGs in Present mode
 SMC_ATR_PERIOD     = 200   // ATR period for swing measurement and zone scaling
 SMC_MTF_LINE_EXT   = 20    // Multiplier for extending MTF level lines forward
 
@@ -853,154 +852,154 @@ bool alert_choch_bull = cb_os == 1 and cb_os[1] != 1
 bool alert_choch_bear = cb_os == -1 and cb_os[1] != -1
 
 // ============================================================================
-//                         MODULE: FAIR VALUE GAPS
+//                      MODULE: FAIR VALUE GAPS
 // ============================================================================
 
 // --- Settings ---
 
-ict_mode     = input.string('Present', "Mode", options=['Present', 'Historical'], group='Fair Value Gaps', tooltip="Present shows FVGs from recent bars only, Historical shows all")
-ict_FVG_type = input.string('FVG', "Type", group='Fair Value Gaps', options=['FVG', 'IFVG'],
-               tooltip='FVG detects true gaps, IFVG detects implied gaps where body did not fill')
-ict_visBxs   = input.int(1, "Visible FVGs", group='Fair Value Gaps',
-               minval=1, maxval=20, tooltip='Maximum number of FVG boxes to display per direction')
-ict_cFVGbl   = input.color(color.new(#22ab94, 0), "Bullish FVG  ", group='Fair Value Gaps', inline='FVGbl')
-ict_cFVGblBR = input.color(color.new(#22ab94, 50), "Break", group='Fair Value Gaps', inline='FVGbl')
-ict_cFVGbr   = input.color(color.new(#f7525f, 0), "Bearish FVG ", group='Fair Value Gaps', inline='FVGbr')
-ict_cFVGbrBR = input.color(color.new(#f7525f, 50), "Break", group='Fair Value Gaps', inline='FVGbr')
+fvg_threshold_pct = input.float(0, "Threshold %", minval=0, maxval=100, step=0.1, inline="fvg_thr", group="Fair Value Gaps", tooltip="Minimum gap size as percentage of price. 0 = show all FVGs")
+fvg_auto_threshold = input(false, "Auto", inline="fvg_thr", group="Fair Value Gaps", tooltip="Automatically calculate threshold based on average bar range")
+fvg_show_last = input.int(0, "Unmitigated Levels", minval=0, group="Fair Value Gaps", tooltip="Show lines at unmitigated FVG levels. 0 = disabled")
+fvg_mitigation_levels = input.bool(false, "Mitigation Levels", group="Fair Value Gaps", tooltip="Show dashed lines where FVGs were mitigated")
+fvg_tf = input.timeframe("", "Timeframe", group="Fair Value Gaps", tooltip="Timeframe for FVG detection. Empty = chart timeframe")
 
-// Constants
-fvg_body_threshold  = 0.36  // Min body-to-range ratio for FVG candle
-fvg_break_lookback  = 10    // Max FVG boxes to check for breaks
-fvg_extension_bars  = 8     // Bars to extend FVG boxes forward
+// --- Constants ---
+FVG_EXTEND = 20  // Bars to extend FVG boxes forward
+
+// --- Colors ---
+fvg_bull_css = color.new(#089981, 70)
+fvg_bear_css = color.new(#f23645, 70)
 
 // --- Types ---
 
-type ict_FVG
-    box  bx
-    bool active
+type fvg_data
+    float max
+    float min
+    bool  isbull
+    int   t = time
+    int   bar_born = 0
+    int   touches = 0
+
+// --- Detection Function ---
+
+fvg_detect() =>
+    var new_fvg = fvg_data.new(na, na, false, na)
+    threshold = fvg_auto_threshold ? ta.cum((high - low) / low) / bar_index : fvg_threshold_pct / 100
+
+    bull_fvg = low > high[2] and close[1] > high[2] and (low - high[2]) / high[2] > threshold
+    bear_fvg = high < low[2] and close[1] < low[2] and (low[2] - high) / high > threshold
+
+    if bull_fvg
+        new_fvg := fvg_data.new(low, high[2], true)
+    else if bear_fvg
+        new_fvg := fvg_data.new(low[2], high, false)
+
+    [bull_fvg, bear_fvg, new_fvg]
 
 // --- Variables ---
 
-ict_len       = 2
-ict_per       = ict_mode == 'Present' ? last_bar_index - bar_index <= FVG_PRESENT_LIMIT : true
-ict_mx        = math.max(close, open)
-ict_mn        = math.min(close, open)
-ict_body      = math.abs(close - open)
-ict_meanBody  = ta.sma(ict_body, ict_len)
+var float fvg_max_bull = na, var float fvg_min_bull = na, var int fvg_bull_count = 0, var int fvg_bull_mitigated = 0
+var float fvg_max_bear = na, var float fvg_min_bear = na, var int fvg_bear_count = 0, var int fvg_bear_mitigated = 0
+var int fvg_last_t = 0
 
-var ict_FVG[] ict_bFVG_UP = array.new<ict_FVG>()
-var ict_FVG[] ict_bFVG_DN = array.new<ict_FVG>()
+var fvg_records = array.new<fvg_data>(0)
+var fvg_areas = array.new<box>(0)
 
-// --- Execution: Fair Value Gaps ---
-
-// Candle analysis for FVG
-ict_L_body   = high - ict_mx < ict_body * fvg_body_threshold and ict_mn - low < ict_body * fvg_body_threshold
-ict_L_bodyUP = ict_body > ict_meanBody and ict_L_body and close > open
-ict_L_bodyDN = ict_body > ict_meanBody and ict_L_body and close < open
-
-// Imbalance detection
-ict_imbalanceUP = ict_L_bodyUP[1] and (ict_FVG_type == 'FVG' ? low > high[2] : low < high[2])
-ict_imbalanceDN = ict_L_bodyDN[1] and (ict_FVG_type == 'FVG' ? high < low[2] : high > low[2])
-
-// Initialize FVG arrays
-if barstate.isfirst
-    for i = 0 to ict_visBxs - 1
-        ict_bFVG_UP.unshift(ict_FVG.new(box(na), false))
-        ict_bFVG_DN.unshift(ict_FVG.new(box(na), false))
-
-// Create bullish FVGs
-if ict_imbalanceUP and ict_per and show_fvg
-    if ict_imbalanceUP[1]
-        ict_bFVG_UP.get(0).bx.set_lefttop(bar_index - 2, low)
-        ict_bFVG_UP.get(0).bx.set_rightbottom(bar_index + fvg_extension_bars, high[2])
-    else
-        ict_bFVG_UP.unshift(ict_FVG.new(
-          box.new(
-           bar_index - 2
-         , ict_FVG_type == 'FVG' ? low : high[2]
-         , bar_index, ict_FVG_type == 'FVG' ? high[2] : low
-         , bgcolor      = color.new(ict_cFVGbl, 90)
-         , border_color = color.new(ict_cFVGbl, 65)
-         , text_color   = color.new(ict_cFVGbl, 100)
-         , text_size = size.small
-         , text = '')
-         , true))
-        ict_bFVG_UP.pop().bx.delete()
-
-// Create bearish FVGs
-if ict_imbalanceDN and ict_per and show_fvg
-    if ict_imbalanceDN[1]
-        ict_bFVG_DN.get(0).bx.set_lefttop(bar_index - 2, low[2])
-        ict_bFVG_DN.get(0).bx.set_rightbottom(bar_index + fvg_extension_bars, high)
-    else
-        ict_bFVG_DN.unshift(ict_FVG.new(
-          box.new(
-           bar_index - 2
-         , ict_FVG_type == 'FVG' ? low[2] : high
-         , bar_index, ict_FVG_type == 'FVG' ? high : low[2]
-         , bgcolor      = color.new(ict_cFVGbr, 90)
-         , border_color = color.new(ict_cFVGbr, 65)
-         , text_color   = color.new(ict_cFVGbr, 100)
-         , text_size = size.small
-         , text = '')
-         , true))
-        ict_bFVG_DN.pop().bx.delete()
-
-// FVG break detection
-for i = 0 to math.min(fvg_break_lookback, ict_bFVG_UP.size() - 1)
-    getUPi = ict_bFVG_UP.get(i)
-    if getUPi.active
-        getUPi.bx.set_right(bar_index + fvg_extension_bars)
-        if low < getUPi.bx.get_top()
-            getUPi.bx.set_border_style(line.style_dashed)
-        if low < getUPi.bx.get_bottom()
-            getUPi.bx.delete()
-            getUPi.active := false
-
-for i = 0 to math.min(fvg_break_lookback, ict_bFVG_DN.size() - 1)
-    getDNi = ict_bFVG_DN.get(i)
-    if getDNi.active
-        getDNi.bx.set_right(bar_index + fvg_extension_bars)
-        if high > getDNi.bx.get_bottom()
-            getDNi.bx.set_border_style(line.style_dashed)
-        if high > getDNi.bx.get_top()
-            getDNi.bx.delete()
-            getDNi.active := false
-
-// --- Shared FVG State (computed once, consumed by Confluence + Entry + Alerts) ---
-
+// --- Shared state for confluence/entry ---
 fvg_has_active_bull = false
 fvg_has_active_bear = false
 fvg_active_bull_top = float(na)
 fvg_active_bull_btm = float(na)
 fvg_active_bear_top = float(na)
 fvg_active_bear_btm = float(na)
-fvg_is_bull_broken  = false
-fvg_is_bear_broken  = false
+var int fvg_active_bar_born = 0
+var int fvg_active_touches = 0
 
-for i = 0 to math.min(fvg_break_lookback, ict_bFVG_UP.size() - 1)
-    bxi = ict_bFVG_UP.get(i)
-    if bxi.active
-        if not fvg_has_active_bull
-            fvg_has_active_bull := true
-            fvg_active_bull_top := bxi.bx.get_top()
-            fvg_active_bull_btm := bxi.bx.get_bottom()
-        if low < bxi.bx.get_bottom()
-            fvg_is_bull_broken := true
+// --- Detection ---
 
-for i = 0 to math.min(fvg_break_lookback, ict_bFVG_DN.size() - 1)
-    bxi = ict_bFVG_DN.get(i)
-    if bxi.active
-        if not fvg_has_active_bear
-            fvg_has_active_bear := true
-            fvg_active_bear_top := bxi.bx.get_top()
-            fvg_active_bear_btm := bxi.bx.get_bottom()
-        if high > bxi.bx.get_top()
-            fvg_is_bear_broken := true
+[fvg_is_bull, fvg_is_bear, fvg_new] = request.security(syminfo.tickerid, fvg_tf, fvg_detect())
 
-// --- FVG break edge detection (used by alerts) ---
-alert_fvg_bull_break = fvg_is_bull_broken and not fvg_is_bull_broken[1]
-alert_fvg_bear_break = fvg_is_bear_broken and not fvg_is_bear_broken[1]
+// Bull FVG
+if show_fvg and fvg_is_bull and fvg_new.t != fvg_last_t
+    fvg_areas.unshift(box.new(bar_index - 2, fvg_new.max, bar_index + FVG_EXTEND, fvg_new.min, na, bgcolor=fvg_bull_css))
+    fvg_new.bar_born := bar_index
+    fvg_records.unshift(fvg_new)
+    fvg_bull_count += 1
+    fvg_last_t := fvg_new.t
+
+// Bear FVG
+if show_fvg and fvg_is_bear and fvg_new.t != fvg_last_t
+    fvg_areas.unshift(box.new(bar_index - 2, fvg_new.max, bar_index + FVG_EXTEND, fvg_new.min, na, bgcolor=fvg_bear_css))
+    fvg_new.bar_born := bar_index
+    fvg_records.unshift(fvg_new)
+    fvg_bear_count += 1
+    fvg_last_t := fvg_new.t
+
+// --- Mitigation Detection ---
+
+alert_fvg_bull_break = false
+alert_fvg_bear_break = false
+
+if fvg_records.size() > 0
+    for i = fvg_records.size() - 1 to 0
+        get_fvg = fvg_records.get(i)
+
+        if get_fvg.isbull
+            if close < get_fvg.min
+                if fvg_mitigation_levels
+                    line.new(get_fvg.t, get_fvg.min, time, get_fvg.min, xloc.bar_time, color=fvg_bull_css, style=line.style_dashed)
+
+                area = fvg_areas.remove(i)
+                area.delete()
+                fvg_records.remove(i)
+                fvg_bull_mitigated += 1
+                alert_fvg_bull_break := true
+            else
+                fvg_in_zone = low <= get_fvg.max and close > get_fvg.min
+                fvg_was_outside = low[1] > get_fvg.max
+                if fvg_in_zone and fvg_was_outside
+                    get_fvg.touches += 1
+                if not fvg_has_active_bull
+                    fvg_has_active_bull := true
+                    fvg_active_bull_top := get_fvg.max
+                    fvg_active_bull_btm := get_fvg.min
+                    fvg_active_bar_born := get_fvg.bar_born
+                    fvg_active_touches := get_fvg.touches
+        else
+            if close > get_fvg.max
+                if fvg_mitigation_levels
+                    line.new(get_fvg.t, get_fvg.max, time, get_fvg.max, xloc.bar_time, color=fvg_bear_css, style=line.style_dashed)
+
+                area = fvg_areas.remove(i)
+                area.delete()
+                fvg_records.remove(i)
+                fvg_bear_mitigated += 1
+                alert_fvg_bear_break := true
+            else
+                fvg_in_zone = high >= get_fvg.min and close < get_fvg.max
+                fvg_was_outside = high[1] < get_fvg.min
+                if fvg_in_zone and fvg_was_outside
+                    get_fvg.touches += 1
+                if not fvg_has_active_bear
+                    fvg_has_active_bear := true
+                    fvg_active_bear_top := get_fvg.max
+                    fvg_active_bear_btm := get_fvg.min
+                    fvg_active_bar_born := get_fvg.bar_born
+                    fvg_active_touches := get_fvg.touches
+
+// --- Unmitigated Lines ---
+
+var fvg_unmitigated = array.new<line>(0)
+
+if barstate.islast and fvg_show_last > 0 and fvg_records.size() > 0
+    if fvg_unmitigated.size() > 0
+        for element in fvg_unmitigated
+            element.delete()
+        fvg_unmitigated.clear()
+
+    for i = 0 to math.min(fvg_show_last - 1, fvg_records.size() - 1)
+        get_fvg = fvg_records.get(i)
+        fvg_unmitigated.push(line.new(get_fvg.t, get_fvg.isbull ? get_fvg.min : get_fvg.max, time, get_fvg.isbull ? get_fvg.min : get_fvg.max, xloc.bar_time, color=get_fvg.isbull ? fvg_bull_css : fvg_bear_css))
 
 // ============================================================================
 //                     MODULE: LIQUIDITY SWINGS
@@ -1154,7 +1153,7 @@ alert_sweep_low  = liq_pl_crossed and not liq_pl_crossed[1]
 // ============================================================================
 //                      MODULE: CANDLESTICK CHANNELS
 // ============================================================================
-// Candlestick Channels [LuxAlgo] - pattern-based dynamic channels
+// Pattern-based dynamic channels
 // Patterns converge upper/lower bands on detection, creating trend channels
 
 // --- Settings ---
@@ -1299,14 +1298,18 @@ bias_ema() =>
     e1 > e2 and e1 > e3 ? 1 : e1 < e2 and e1 < e3 ? -1 : 0
 
 // --- Request each timeframe (consolidated: CHoCH + EMA in single call per TF) ---
+// Uses [1] offset + lookahead_on for confirmed/closed HTF bar data.
+// This ensures values are identical regardless of chart timeframe (non-repainting).
 
-bias_combined() =>
-    [bias_choch(), bias_ema()]
+bias_combined_confirmed() =>
+    choch = bias_choch()
+    ema = bias_ema()
+    [choch[1], ema[1]]
 
-[bias_1h,  ema_1h]  = request.security(syminfo.tickerid, "60",  bias_combined())
-[bias_4h,  ema_4h]  = request.security(syminfo.tickerid, "240", bias_combined())
-[bias_d,   ema_d]   = request.security(syminfo.tickerid, "D",   bias_combined())
-[bias_w,   ema_w]   = request.security(syminfo.tickerid, "W",   bias_combined())
+[bias_1h,  ema_1h]  = request.security(syminfo.tickerid, "60",  bias_combined_confirmed(), lookahead=barmerge.lookahead_on)
+[bias_4h,  ema_4h]  = request.security(syminfo.tickerid, "240", bias_combined_confirmed(), lookahead=barmerge.lookahead_on)
+[bias_d,   ema_d]   = request.security(syminfo.tickerid, "D",   bias_combined_confirmed(), lookahead=barmerge.lookahead_on)
+[bias_w,   ema_w]   = request.security(syminfo.tickerid, "W",   bias_combined_confirmed(), lookahead=barmerge.lookahead_on)
 
 bias_color(int b) => b == 1 ? COLOR_BULL : b == -1 ? COLOR_BEAR : COLOR_NEUTRAL
 
@@ -1368,28 +1371,37 @@ conf_bull_align = (conf_wd_aligned and bias_w == 1 ? 1 : 0) + (conf_d4h_aligned 
 conf_bear_align = (conf_wd_aligned and bias_w == -1 ? 1 : 0) + (conf_d4h_aligned and bias_d == -1 ? 1 : 0) + (conf_4h1h_aligned and bias_4h == -1 ? 1 : 0)
 conf_direction = conf_bull_align > conf_bear_align ? 1 : conf_bear_align > conf_bull_align ? -1 : 0
 
-conf_dir_text = conf_direction == 1 ? "LONG ▲" : conf_direction == -1 ? "SHORT ▼" : "NEUTRAL -"
+conf_dir_text = conf_direction == 1 ? "LONG ▲" : conf_direction == -1 ? "SHORT ▼" : "NEUTRAL"
 conf_dir_color = conf_direction == 1 ? COLOR_BULL : conf_direction == -1 ? COLOR_BEAR : COLOR_NEUTRAL
 
-// --- Entry Checklist (4 factors, min 1H) ---
+// --- FVG Entry Score (pure FVG quality, 0-4) ---
 
-// FVG: is price inside an active FVG in the confluence direction?
-entry_at_fvg = (conf_direction == 1 and fvg_has_active_bull and low <= fvg_active_bull_top and close > fvg_active_bull_btm) or (conf_direction == -1 and fvg_has_active_bear and high >= fvg_active_bear_btm and close < fvg_active_bear_top)
+// Gate: is price inside an active FVG?
+fvg_price_in_bull = fvg_has_active_bull and low <= fvg_active_bull_top and close > fvg_active_bull_btm
+fvg_price_in_bear = fvg_has_active_bear and high >= fvg_active_bear_btm and close < fvg_active_bear_top
+fvg_price_in_zone = fvg_price_in_bull or fvg_price_in_bear
 
-// Equilibrium: is price near the 0.5 level? (within 0.5% of equilibrium)
-entry_at_eq = not na(pd_eq_val) and math.abs(close - pd_eq_val) / pd_eq_val < 0.005
+// Factor 1: Fresh (formed within last 20 bars)
+fvg_is_fresh = fvg_active_bar_born > 0 and (bar_index - fvg_active_bar_born) <= 20
 
-// Candle Pattern: is there a reversal pattern in the confluence direction?
-entry_candle_bull = cp_hammer or cp_ihammer or cp_bulleng or cp_wm
-entry_candle_bear = cp_shooting or cp_hanging or cp_beareng or cp_bm
-entry_has_pattern = (conf_direction == 1 and entry_candle_bull) or (conf_direction == -1 and entry_candle_bear)
+// Factor 2: First touch (never tested before — touch count is 0 or 1 meaning current touch is the first)
+fvg_is_first_touch = fvg_active_touches <= 1
 
-// LTF CHoCH: has structure shifted in the trade direction on current chart?
-// This uses the chart's own ChoCH module (cb_os variable)
-entry_ltf_choch = (conf_direction == 1 and cb_os == 1 and cb_os[1] != 1) or (conf_direction == -1 and cb_os == -1 and cb_os[1] != -1)
+// Factor 3: Higher TF (FVG timeframe is >= 1H)
+// If fvg_tf is empty, it uses chart TF. Check if effective TF >= 60 minutes.
+fvg_effective_tf = fvg_tf == "" ? timeframe.period : fvg_tf
+fvg_is_htf = timeframe.in_seconds(fvg_effective_tf) >= timeframe.in_seconds("60")
 
-// Entry score (max 4)
-entry_score = (entry_at_fvg ? 1 : 0) + (entry_at_eq ? 1 : 0) + (entry_has_pattern ? 1 : 0) + (entry_ltf_choch ? 1 : 0)
+// Factor 4: Deep fill (price reached >= 50% into the FVG zone)
+fvg_zone_mid_bull = fvg_has_active_bull ? math.avg(fvg_active_bull_top, fvg_active_bull_btm) : na
+fvg_zone_mid_bear = fvg_has_active_bear ? math.avg(fvg_active_bear_top, fvg_active_bear_btm) : na
+fvg_deep_fill = (fvg_price_in_bull and not na(fvg_zone_mid_bull) and low <= fvg_zone_mid_bull) or (fvg_price_in_bear and not na(fvg_zone_mid_bear) and high >= fvg_zone_mid_bear)
+
+// Pure FVG score (0-4, only counts when price is in zone)
+fvg_score = fvg_price_in_zone ? (fvg_is_fresh ? 1 : 0) + (fvg_is_first_touch ? 1 : 0) + (fvg_is_htf ? 1 : 0) + (fvg_deep_fill ? 1 : 0) : 0
+
+// Simple entry flag (for summary)
+entry_at_fvg = fvg_price_in_zone
 
 // Session label (no score) — fetched from 1m via request.security for accuracy on all TFs
 conf_ses_detect() =>
@@ -1403,7 +1415,7 @@ conf_ses_detect() =>
 conf_ses_text = conf_is_ny and conf_is_ldn ? "London / NY" : conf_is_ny ? "New York" : conf_is_ldn ? "London" : conf_is_asia ? "Asia" : "Off Hours"
 
 // --- Table Drawing ---
-var table conf_tbl = table.new(conf_tbl_pos, 5, 18, border_width=1, border_color=COLOR_TABLE_BORDER, bgcolor=COLOR_TABLE_BG, frame_width=1, frame_color=COLOR_TABLE_BORDER)
+var table conf_tbl = table.new(conf_tbl_pos, 4, 19, border_width=1, border_color=COLOR_TABLE_BORDER, bgcolor=COLOR_TABLE_BG, frame_width=1, frame_color=COLOR_TABLE_BORDER)
 
 if show_confluence_table and barstate.islast
     int row = 0
@@ -1415,68 +1427,51 @@ if show_confluence_table and barstate.islast
         table.cell(conf_tbl, 1, conf_title_row, "", bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 2, conf_title_row, "", bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 3, conf_title_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, conf_title_row, "", bgcolor=COLOR_TABLE_BG)
-        table.merge_cells(conf_tbl, 0, conf_title_row, 4, conf_title_row)
+        table.merge_cells(conf_tbl, 0, conf_title_row, 3, conf_title_row)
         row += 1
 
-        // Header (5-column)
+        // Header (4-column)
         table.cell(conf_tbl, 0, row, "",        text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, "CHoCH",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Change of Character - structure direction")
         table.cell(conf_tbl, 2, row, "EMA",     text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="EMA 50/100/200 alignment")
-        table.cell(conf_tbl, 3, row, "Aligned", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="CHoCH aligns with timeframe above")
-        table.cell(conf_tbl, 4, row, "Score",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, row, "Score",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // Weekly (max 1: match only) - 5-column data row
+        // Weekly (max 1: match only)
         table.cell(conf_tbl, 0, row, "Weekly",  text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_arrow(bias_w), text_color=bias_color(bias_w), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("W", bias_w))
         table.cell(conf_tbl, 2, row, conf_arrow(ema_w),  text_color=bias_color(ema_w),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("W", ema_w))
-        table.cell(conf_tbl, 3, row, "-",       text_color=COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Weekly has no timeframe above")
-        table.cell(conf_tbl, 4, row, str.tostring(conf_w_score) + "/1", text_color=conf_w_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, row, str.tostring(conf_w_score) + "/1", text_color=conf_w_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // Daily (max 2: match + W→D aligned) - 5-column data row
+        // Daily (max 2: match + W→D aligned)
         table.cell(conf_tbl, 0, row, "Daily",   text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_arrow(bias_d), text_color=bias_color(bias_d), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("D", bias_d))
         table.cell(conf_tbl, 2, row, conf_arrow(ema_d),  text_color=bias_color(ema_d),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("D", ema_d))
-        table.cell(conf_tbl, 3, row, conf_wd_aligned ? "✓" : "✗", text_color=conf_wd_aligned ? COLOR_BULL : COLOR_BEAR, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Weekly → Daily CHoCH alignment")
-        table.cell(conf_tbl, 4, row, str.tostring(conf_d_score) + "/2", text_color=conf_d_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, row, str.tostring(conf_d_score) + "/2", text_color=conf_d_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // 4H (max 2: match + D→4H aligned) - 5-column data row
+        // 4H (max 2: match + D→4H aligned)
         table.cell(conf_tbl, 0, row, "4H",      text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_arrow(bias_4h), text_color=bias_color(bias_4h), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("4H", bias_4h))
         table.cell(conf_tbl, 2, row, conf_arrow(ema_4h),  text_color=bias_color(ema_4h),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("4H", ema_4h))
-        table.cell(conf_tbl, 3, row, conf_d4h_aligned ? "✓" : "✗", text_color=conf_d4h_aligned ? COLOR_BULL : COLOR_BEAR, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="Daily → 4H CHoCH alignment")
-        table.cell(conf_tbl, 4, row, str.tostring(conf_4h_score) + "/2", text_color=conf_4h_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, row, str.tostring(conf_4h_score) + "/2", text_color=conf_4h_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // 1H (max 2: match + 4H→1H aligned) - 5-column data row
+        // 1H (max 2: match + 4H→1H aligned)
         table.cell(conf_tbl, 0, row, "1H",      text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, row, conf_arrow(bias_1h), text_color=bias_color(bias_1h), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_tip("1H", bias_1h))
         table.cell(conf_tbl, 2, row, conf_arrow(ema_1h),  text_color=bias_color(ema_1h),  text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ema_tip("1H", ema_1h))
-        table.cell(conf_tbl, 3, row, conf_4h1h_aligned ? "✓" : "✗", text_color=conf_4h1h_aligned ? COLOR_BULL : COLOR_BEAR, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip="4H → 1H CHoCH alignment")
-        table.cell(conf_tbl, 4, row, str.tostring(conf_1h_score) + "/2", text_color=conf_1h_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, row, str.tostring(conf_1h_score) + "/2", text_color=conf_1h_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         row += 1
 
-        // Session (full-width: label + session text spans cols 0-4)
+        // Session (full-width: label col 0, session text spans cols 1-3)
         int ses_row = row
         table.cell(conf_tbl, 0, ses_row, "Session", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 1, ses_row, conf_ses_text, text_color=(conf_is_ny or conf_is_ldn or conf_is_asia) ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 2, ses_row, "", bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 3, ses_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, ses_row, "", bgcolor=COLOR_TABLE_BG)
-        table.merge_cells(conf_tbl, 1, ses_row, 4, ses_row)
-        row += 1
-
-        // Separator (full-width merge cols 0-4)
-        int sep_row = row
-        table.cell(conf_tbl, 0, sep_row, "", bgcolor=COLOR_TABLE_BG, text_size=conf_size)
-        table.cell(conf_tbl, 1, sep_row, "", bgcolor=COLOR_TABLE_BG, text_size=conf_size)
-        table.cell(conf_tbl, 2, sep_row, "", bgcolor=COLOR_TABLE_BG, text_size=conf_size)
-        table.cell(conf_tbl, 3, sep_row, "", bgcolor=COLOR_TABLE_BG, text_size=conf_size)
-        table.cell(conf_tbl, 4, sep_row, "", bgcolor=COLOR_TABLE_BG, text_size=conf_size)
-        table.merge_cells(conf_tbl, 0, sep_row, 4, sep_row)
+        table.merge_cells(conf_tbl, 1, ses_row, 3, ses_row)
         row += 1
 
         // === ENTRY CHECKLIST === (full-width header)
@@ -1485,48 +1480,17 @@ if show_confluence_table and barstate.islast
         table.cell(conf_tbl, 1, entry_hdr_row, "", bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 2, entry_hdr_row, "", bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 3, entry_hdr_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, entry_hdr_row, "", bgcolor=COLOR_TABLE_BG)
-        table.merge_cells(conf_tbl, 0, entry_hdr_row, 4, entry_hdr_row)
+        table.merge_cells(conf_tbl, 0, entry_hdr_row, 3, entry_hdr_row)
         row += 1
 
-        // FVG (2-column: label col 0, status merged cols 1-3, score col 4)
+        // FVG quality score
         int fvg_row = row
+        fvg_status = fvg_price_in_zone ? (fvg_is_htf ? "At HTF FVG" : "At FVG") : "Not yet"
         table.cell(conf_tbl, 0, fvg_row, "FVG Zone", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, fvg_row, entry_at_fvg ? "At FVG" : "Not yet", text_color=entry_at_fvg ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 1, fvg_row, fvg_status, text_color=fvg_price_in_zone ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.cell(conf_tbl, 2, fvg_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, fvg_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, fvg_row, entry_at_fvg ? "+1" : "0", text_color=entry_at_fvg ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.merge_cells(conf_tbl, 1, fvg_row, 3, fvg_row)
-        row += 1
-
-        // Equilibrium (2-column: label col 0, status merged cols 1-3, score col 4)
-        int eq_row = row
-        table.cell(conf_tbl, 0, eq_row, "Equilibrium", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, eq_row, entry_at_eq ? "At 0.5" : "Not yet", text_color=entry_at_eq ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 2, eq_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, eq_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, eq_row, entry_at_eq ? "+1" : "0", text_color=entry_at_eq ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.merge_cells(conf_tbl, 1, eq_row, 3, eq_row)
-        row += 1
-
-        // Candle Pattern (2-column: label col 0, status merged cols 1-3, score col 4)
-        int cp_row = row
-        table.cell(conf_tbl, 0, cp_row, "Candle Pattern", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, cp_row, entry_has_pattern ? "Detected" : "None", text_color=entry_has_pattern ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 2, cp_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, cp_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, cp_row, entry_has_pattern ? "+1" : "0", text_color=entry_has_pattern ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.merge_cells(conf_tbl, 1, cp_row, 3, cp_row)
-        row += 1
-
-        // LTF CHoCH (2-column: label col 0, status merged cols 1-3, score col 4)
-        int ltf_row = row
-        table.cell(conf_tbl, 0, ltf_row, "LTF CHoCH", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, ltf_row, entry_ltf_choch ? "Confirmed" : "Waiting", text_color=entry_ltf_choch ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 2, ltf_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, ltf_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 4, ltf_row, entry_ltf_choch ? "+1" : "0", text_color=entry_ltf_choch ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.merge_cells(conf_tbl, 1, ltf_row, 3, ltf_row)
+        table.cell(conf_tbl, 3, fvg_row, str.tostring(fvg_score) + "/4", text_color=fvg_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.merge_cells(conf_tbl, 1, fvg_row, 2, fvg_row)
         row += 1
 
     // === SUMMARY SECTION TITLE ===
@@ -1535,8 +1499,7 @@ if show_confluence_table and barstate.islast
     table.cell(conf_tbl, 1, sum_title_row, "", bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 2, sum_title_row, "", bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 3, sum_title_row, "", bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 4, sum_title_row, "", bgcolor=COLOR_TABLE_BG)
-    table.merge_cells(conf_tbl, 0, sum_title_row, 4, sum_title_row)
+    table.merge_cells(conf_tbl, 0, sum_title_row, 3, sum_title_row)
     row += 1
 
     // Confluence score
@@ -1545,18 +1508,16 @@ if show_confluence_table and barstate.islast
     table.cell(conf_tbl, 1, conf_row, str.tostring(conf_score) + "/7", text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 2, conf_row, "", bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 3, conf_row, "", bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 4, conf_row, "", bgcolor=COLOR_TABLE_BG)
-    table.merge_cells(conf_tbl, 1, conf_row, 4, conf_row)
+    table.merge_cells(conf_tbl, 1, conf_row, 3, conf_row)
     row += 1
 
-    // Entry score
+    // Entry score (FVG-based)
     int ent_row = row
     table.cell(conf_tbl, 0, ent_row, "Entry", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 1, ent_row, str.tostring(entry_score) + "/4", text_color=entry_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    table.cell(conf_tbl, 1, ent_row, str.tostring(fvg_score) + "/4", text_color=fvg_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 2, ent_row, "", bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 3, ent_row, "", bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 4, ent_row, "", bgcolor=COLOR_TABLE_BG)
-    table.merge_cells(conf_tbl, 1, ent_row, 4, ent_row)
+    table.merge_cells(conf_tbl, 1, ent_row, 3, ent_row)
     row += 1
 
     // Direction (last - the conclusion)
@@ -1565,8 +1526,7 @@ if show_confluence_table and barstate.islast
     table.cell(conf_tbl, 1, dir_row, conf_dir_text, text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 2, dir_row, "", bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 3, dir_row, "", bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 4, dir_row, "", bgcolor=COLOR_TABLE_BG)
-    table.merge_cells(conf_tbl, 1, dir_row, 4, dir_row)
+    table.merge_cells(conf_tbl, 1, dir_row, 3, dir_row)
 
 // --- Alerts ---
 conf_score_meets = conf_score >= conf_alert_threshold
