@@ -877,8 +877,6 @@ type fvg_data
     float min
     bool  isbull
     int   t = time
-    int   bar_born = 0
-    int   touches = 0
 
 // --- Detection Function ---
 
@@ -912,8 +910,6 @@ fvg_active_bull_top = float(na)
 fvg_active_bull_btm = float(na)
 fvg_active_bear_top = float(na)
 fvg_active_bear_btm = float(na)
-var int fvg_active_bar_born = 0
-var int fvg_active_touches = 0
 
 // --- Detection ---
 
@@ -922,7 +918,6 @@ var int fvg_active_touches = 0
 // Bull FVG
 if show_fvg and fvg_is_bull and fvg_new.t != fvg_last_t
     fvg_areas.unshift(box.new(bar_index - 2, fvg_new.max, bar_index + FVG_EXTEND, fvg_new.min, na, bgcolor=fvg_bull_css))
-    fvg_new.bar_born := bar_index
     fvg_records.unshift(fvg_new)
     fvg_bull_count += 1
     fvg_last_t := fvg_new.t
@@ -930,7 +925,6 @@ if show_fvg and fvg_is_bull and fvg_new.t != fvg_last_t
 // Bear FVG
 if show_fvg and fvg_is_bear and fvg_new.t != fvg_last_t
     fvg_areas.unshift(box.new(bar_index - 2, fvg_new.max, bar_index + FVG_EXTEND, fvg_new.min, na, bgcolor=fvg_bear_css))
-    fvg_new.bar_born := bar_index
     fvg_records.unshift(fvg_new)
     fvg_bear_count += 1
     fvg_last_t := fvg_new.t
@@ -955,16 +949,10 @@ if fvg_records.size() > 0
                 fvg_bull_mitigated += 1
                 alert_fvg_bull_break := true
             else
-                fvg_in_zone = low <= get_fvg.max and close > get_fvg.min
-                fvg_was_outside = low[1] > get_fvg.max
-                if fvg_in_zone and fvg_was_outside
-                    get_fvg.touches += 1
                 if not fvg_has_active_bull
                     fvg_has_active_bull := true
                     fvg_active_bull_top := get_fvg.max
                     fvg_active_bull_btm := get_fvg.min
-                    fvg_active_bar_born := get_fvg.bar_born
-                    fvg_active_touches := get_fvg.touches
         else
             if close > get_fvg.max
                 if fvg_mitigation_levels
@@ -976,16 +964,10 @@ if fvg_records.size() > 0
                 fvg_bear_mitigated += 1
                 alert_fvg_bear_break := true
             else
-                fvg_in_zone = high >= get_fvg.min and close < get_fvg.max
-                fvg_was_outside = high[1] < get_fvg.min
-                if fvg_in_zone and fvg_was_outside
-                    get_fvg.touches += 1
                 if not fvg_has_active_bear
                     fvg_has_active_bear := true
                     fvg_active_bear_top := get_fvg.max
                     fvg_active_bear_btm := get_fvg.min
-                    fvg_active_bar_born := get_fvg.bar_born
-                    fvg_active_touches := get_fvg.touches
 
 // --- Unmitigated Lines ---
 
@@ -1374,34 +1356,90 @@ conf_direction = conf_bull_align > conf_bear_align ? 1 : conf_bear_align > conf_
 conf_dir_text = conf_direction == 1 ? "LONG ▲" : conf_direction == -1 ? "SHORT ▼" : "NEUTRAL"
 conf_dir_color = conf_direction == 1 ? COLOR_BULL : conf_direction == -1 ? COLOR_BEAR : COLOR_NEUTRAL
 
-// --- FVG Entry Score (pure FVG quality, 0-4) ---
+// --- Multi-TF FVG Entry Detection ---
+// Detect active FVG zones on fixed timeframes for consistent entry scoring
 
-// Gate: is price inside an active FVG?
-fvg_price_in_bull = fvg_has_active_bull and low <= fvg_active_bull_top and close > fvg_active_bull_btm
-fvg_price_in_bear = fvg_has_active_bear and high >= fvg_active_bear_btm and close < fvg_active_bear_top
-fvg_price_in_zone = fvg_price_in_bull or fvg_price_in_bear
+fvg_zone_detect() =>
+    var array<fvg_data> records = array.new<fvg_data>(0)
+    var int last_t = 0
 
-// Factor 1: Fresh (formed within last 20 bars)
-fvg_is_fresh = fvg_active_bar_born > 0 and (bar_index - fvg_active_bar_born) <= 20
+    threshold = fvg_auto_threshold ? ta.cum((high - low) / low) / bar_index : fvg_threshold_pct / 100
 
-// Factor 2: First touch (never tested before — touch count is 0 or 1 meaning current touch is the first)
-fvg_is_first_touch = fvg_active_touches <= 1
+    bull_fvg = low > high[2] and close[1] > high[2] and (low - high[2]) / high[2] > threshold
+    bear_fvg = high < low[2] and close[1] < low[2] and (low[2] - high) / high > threshold
 
-// Factor 3: Higher TF (FVG timeframe is >= 1H)
-// If fvg_tf is empty, it uses chart TF. Check if effective TF >= 60 minutes.
-fvg_effective_tf = fvg_tf == "" ? timeframe.period : fvg_tf
-fvg_is_htf = timeframe.in_seconds(fvg_effective_tf) >= timeframe.in_seconds("60")
+    if bull_fvg
+        records.unshift(fvg_data.new(low, high[2], true))
+        if records.size() > 20
+            records.pop()
+    if bear_fvg
+        records.unshift(fvg_data.new(low[2], high, false))
+        if records.size() > 20
+            records.pop()
 
-// Factor 4: Deep fill (price reached >= 50% into the FVG zone)
-fvg_zone_mid_bull = fvg_has_active_bull ? math.avg(fvg_active_bull_top, fvg_active_bull_btm) : na
-fvg_zone_mid_bear = fvg_has_active_bear ? math.avg(fvg_active_bear_top, fvg_active_bear_btm) : na
-fvg_deep_fill = (fvg_price_in_bull and not na(fvg_zone_mid_bull) and low <= fvg_zone_mid_bull) or (fvg_price_in_bear and not na(fvg_zone_mid_bear) and high >= fvg_zone_mid_bear)
+    // Find nearest active bull and bear FVG
+    float bull_top = na
+    float bull_btm = na
+    float bear_top = na
+    float bear_btm = na
 
-// Pure FVG score (0-4, only counts when price is in zone)
-fvg_score = fvg_price_in_zone ? (fvg_is_fresh ? 1 : 0) + (fvg_is_first_touch ? 1 : 0) + (fvg_is_htf ? 1 : 0) + (fvg_deep_fill ? 1 : 0) : 0
+    if records.size() > 0
+        for i = records.size() - 1 to 0
+            r = records.get(i)
+            if r.isbull
+                if close < r.min
+                    records.remove(i)
+                else if na(bull_top)
+                    bull_top := r.max
+                    bull_btm := r.min
+            else
+                if close > r.max
+                    records.remove(i)
+                else if na(bear_top)
+                    bear_top := r.max
+                    bear_btm := r.min
 
-// Simple entry flag (for summary)
-entry_at_fvg = fvg_price_in_zone
+    [bull_top, bull_btm, bear_top, bear_btm]
+
+[fvg_15m_bull_top, fvg_15m_bull_btm, fvg_15m_bear_top, fvg_15m_bear_btm] = request.security(syminfo.tickerid, "15",  fvg_zone_detect())
+[fvg_1h_bull_top,  fvg_1h_bull_btm,  fvg_1h_bear_top,  fvg_1h_bear_btm]  = request.security(syminfo.tickerid, "60",  fvg_zone_detect())
+[fvg_4h_bull_top,  fvg_4h_bull_btm,  fvg_4h_bear_top,  fvg_4h_bear_btm]  = request.security(syminfo.tickerid, "240", fvg_zone_detect())
+
+// Check if price is inside any active FVG across TFs
+// Bull: low dips into zone, close stays above bottom
+// Bear: high rises into zone, close stays below top
+fvg_in_4h_bull  = not na(fvg_4h_bull_top) and low <= fvg_4h_bull_top and close > fvg_4h_bull_btm
+fvg_in_4h_bear  = not na(fvg_4h_bear_top) and high >= fvg_4h_bear_btm and close < fvg_4h_bear_top
+fvg_in_1h_bull  = not na(fvg_1h_bull_top) and low <= fvg_1h_bull_top and close > fvg_1h_bull_btm
+fvg_in_1h_bear  = not na(fvg_1h_bear_top) and high >= fvg_1h_bear_btm and close < fvg_1h_bear_top
+fvg_in_15m_bull = not na(fvg_15m_bull_top) and low <= fvg_15m_bull_top and close > fvg_15m_bull_btm
+fvg_in_15m_bear = not na(fvg_15m_bear_top) and high >= fvg_15m_bear_btm and close < fvg_15m_bear_top
+
+// Highest TF match (prioritize 4H > 1H > 15m)
+fvg_in_bull = fvg_in_4h_bull or fvg_in_1h_bull or fvg_in_15m_bull
+fvg_in_bear = fvg_in_4h_bear or fvg_in_1h_bear or fvg_in_15m_bear
+entry_at_fvg = fvg_in_bull or fvg_in_bear
+
+// FVG TF label for table
+fvg_tf_label = fvg_in_4h_bull or fvg_in_4h_bear ? "4H" : fvg_in_1h_bull or fvg_in_1h_bear ? "1H" : fvg_in_15m_bull or fvg_in_15m_bear ? "15m" : ""
+fvg_dir_label = fvg_in_bull ? "bullish" : fvg_in_bear ? "bearish" : ""
+
+// FVG zone levels for tooltip
+fvg_entry_top = fvg_in_4h_bull ? fvg_4h_bull_top : fvg_in_4h_bear ? fvg_4h_bear_top : fvg_in_1h_bull ? fvg_1h_bull_top : fvg_in_1h_bear ? fvg_1h_bear_top : fvg_in_15m_bull ? fvg_15m_bull_top : fvg_in_15m_bear ? fvg_15m_bear_top : na
+fvg_entry_btm = fvg_in_4h_bull ? fvg_4h_bull_btm : fvg_in_4h_bear ? fvg_4h_bear_btm : fvg_in_1h_bull ? fvg_1h_bull_btm : fvg_in_1h_bear ? fvg_1h_bear_btm : fvg_in_15m_bull ? fvg_15m_bull_btm : fvg_in_15m_bear ? fvg_15m_bear_btm : na
+
+// --- LTF CHoCH for Entry Confirmation ---
+entry_choch_1m  = request.security(syminfo.tickerid, "1",  bias_choch()[1], lookahead=barmerge.lookahead_on)
+entry_choch_5m  = request.security(syminfo.tickerid, "5",  bias_choch()[1], lookahead=barmerge.lookahead_on)
+entry_choch_15m = request.security(syminfo.tickerid, "15", bias_choch()[1], lookahead=barmerge.lookahead_on)
+
+// LTF CHoCH matches confluence direction?
+entry_1m_ok  = (conf_direction == 1 and entry_choch_1m == 1) or (conf_direction == -1 and entry_choch_1m == -1)
+entry_5m_ok  = (conf_direction == 1 and entry_choch_5m == 1) or (conf_direction == -1 and entry_choch_5m == -1)
+entry_15m_ok = (conf_direction == 1 and entry_choch_15m == 1) or (conf_direction == -1 and entry_choch_15m == -1)
+
+// Entry score (max 4)
+entry_score = (entry_at_fvg ? 1 : 0) + (entry_1m_ok ? 1 : 0) + (entry_5m_ok ? 1 : 0) + (entry_15m_ok ? 1 : 0)
 
 // Session label (no score) — fetched from 1m via request.security for accuracy on all TFs
 conf_ses_detect() =>
@@ -1415,7 +1453,7 @@ conf_ses_detect() =>
 conf_ses_text = conf_is_ny and conf_is_ldn ? "London / NY" : conf_is_ny ? "New York" : conf_is_ldn ? "London" : conf_is_asia ? "Asia" : "Off Hours"
 
 // --- Table Drawing ---
-var table conf_tbl = table.new(conf_tbl_pos, 4, 19, border_width=1, border_color=COLOR_TABLE_BORDER, bgcolor=COLOR_TABLE_BG, frame_width=1, frame_color=COLOR_TABLE_BORDER)
+var table conf_tbl = table.new(conf_tbl_pos, 4, 18, border_width=1, border_color=COLOR_TABLE_BORDER, bgcolor=COLOR_TABLE_BG, frame_width=1, frame_color=COLOR_TABLE_BORDER)
 
 if show_confluence_table and barstate.islast
     int row = 0
@@ -1483,14 +1521,45 @@ if show_confluence_table and barstate.islast
         table.merge_cells(conf_tbl, 0, entry_hdr_row, 3, entry_hdr_row)
         row += 1
 
-        // FVG quality score
+        // FVG Zone
         int fvg_row = row
-        fvg_status = fvg_price_in_zone ? (fvg_is_htf ? "At HTF FVG" : "At FVG") : "Not yet"
-        table.cell(conf_tbl, 0, fvg_row, "FVG Zone", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 1, fvg_row, fvg_status, text_color=fvg_price_in_zone ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        fvg_status = entry_at_fvg ? "At " + fvg_tf_label + " FVG" : "Not yet"
+        fvg_tip = entry_at_fvg ? "Price inside " + fvg_dir_label + " " + fvg_tf_label + " FVG (" + str.tostring(fvg_entry_btm, format.mintick) + " - " + str.tostring(fvg_entry_top, format.mintick) + ")" : "No active FVG near current price on 15m, 1H, or 4H"
+        table.cell(conf_tbl, 0, fvg_row, "FVG Zone", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=fvg_tip)
+        table.cell(conf_tbl, 1, fvg_row, fvg_status, text_color=entry_at_fvg ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=fvg_tip)
         table.cell(conf_tbl, 2, fvg_row, "", bgcolor=COLOR_TABLE_BG)
-        table.cell(conf_tbl, 3, fvg_row, str.tostring(fvg_score) + "/4", text_color=fvg_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, fvg_row, entry_at_fvg ? "+1" : "0", text_color=entry_at_fvg ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
         table.merge_cells(conf_tbl, 1, fvg_row, 2, fvg_row)
+        row += 1
+
+        // 1m CHoCH
+        int choch_1m_row = row
+        choch_1m_tip = entry_1m_ok ? "1m structure " + (entry_choch_1m == 1 ? "bullish" : "bearish") + " - aligned with " + conf_dir_text : entry_choch_1m == 0 ? "1m has no change of character - waiting for structure shift" : "1m structure " + (entry_choch_1m == 1 ? "bullish" : "bearish") + " - conflicting with " + conf_dir_text
+        table.cell(conf_tbl, 0, choch_1m_row, "1m CHoCH", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_1m_tip)
+        table.cell(conf_tbl, 1, choch_1m_row, conf_arrow(entry_choch_1m), text_color=bias_color(entry_choch_1m), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_1m_tip)
+        table.cell(conf_tbl, 2, choch_1m_row, "", bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, choch_1m_row, entry_1m_ok ? "+1" : "0", text_color=entry_1m_ok ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.merge_cells(conf_tbl, 1, choch_1m_row, 2, choch_1m_row)
+        row += 1
+
+        // 5m CHoCH
+        int choch_5m_row = row
+        choch_5m_tip = entry_5m_ok ? "5m structure " + (entry_choch_5m == 1 ? "bullish" : "bearish") + " - aligned with " + conf_dir_text : entry_choch_5m == 0 ? "5m has no change of character - waiting for structure shift" : "5m structure " + (entry_choch_5m == 1 ? "bullish" : "bearish") + " - conflicting with " + conf_dir_text
+        table.cell(conf_tbl, 0, choch_5m_row, "5m CHoCH", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_5m_tip)
+        table.cell(conf_tbl, 1, choch_5m_row, conf_arrow(entry_choch_5m), text_color=bias_color(entry_choch_5m), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_5m_tip)
+        table.cell(conf_tbl, 2, choch_5m_row, "", bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, choch_5m_row, entry_5m_ok ? "+1" : "0", text_color=entry_5m_ok ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.merge_cells(conf_tbl, 1, choch_5m_row, 2, choch_5m_row)
+        row += 1
+
+        // 15m CHoCH
+        int choch_15m_row = row
+        choch_15m_tip = entry_15m_ok ? "15m structure " + (entry_choch_15m == 1 ? "bullish" : "bearish") + " - aligned with " + conf_dir_text : entry_choch_15m == 0 ? "15m has no change of character - waiting for structure shift" : "15m structure " + (entry_choch_15m == 1 ? "bullish" : "bearish") + " - conflicting with " + conf_dir_text
+        table.cell(conf_tbl, 0, choch_15m_row, "15m CHoCH", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_15m_tip)
+        table.cell(conf_tbl, 1, choch_15m_row, conf_arrow(entry_choch_15m), text_color=bias_color(entry_choch_15m), text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=choch_15m_tip)
+        table.cell(conf_tbl, 2, choch_15m_row, "", bgcolor=COLOR_TABLE_BG)
+        table.cell(conf_tbl, 3, choch_15m_row, entry_15m_ok ? "+1" : "0", text_color=entry_15m_ok ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+        table.merge_cells(conf_tbl, 1, choch_15m_row, 2, choch_15m_row)
         row += 1
 
     // === SUMMARY SECTION TITLE ===
@@ -1504,17 +1573,21 @@ if show_confluence_table and barstate.islast
 
     // Confluence score
     int conf_row = row
-    table.cell(conf_tbl, 0, conf_row, "Confluence", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 1, conf_row, str.tostring(conf_score) + "/7", text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    int conf_cross_tf = (conf_wd_aligned ? 1 : 0) + (conf_d4h_aligned ? 1 : 0) + (conf_4h1h_aligned ? 1 : 0)
+    int conf_same_tf = (conf_w_match ? 1 : 0) + (conf_d_match ? 1 : 0) + (conf_4h_match ? 1 : 0) + (conf_1h_match ? 1 : 0)
+    conf_tip = str.tostring(conf_score) + "/7 - " + str.tostring(conf_cross_tf) + " cross-TF alignments + " + str.tostring(conf_same_tf) + " same-TF matches"
+    table.cell(conf_tbl, 0, conf_row, "Confluence", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=conf_tip)
+    table.cell(conf_tbl, 1, conf_row, str.tostring(conf_score) + "/7", text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=conf_tip)
     table.cell(conf_tbl, 2, conf_row, "", bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 3, conf_row, "", bgcolor=COLOR_TABLE_BG)
     table.merge_cells(conf_tbl, 1, conf_row, 3, conf_row)
     row += 1
 
-    // Entry score (FVG-based)
+    // Entry score
     int ent_row = row
-    table.cell(conf_tbl, 0, ent_row, "Entry", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 1, ent_row, str.tostring(fvg_score) + "/4", text_color=fvg_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    ent_tip = entry_score == 4 ? "Full entry confirmation: at FVG with all LTF CHoCH aligned" : entry_score == 3 ? "Strong entry: at FVG with partial LTF confirmation" : entry_score >= 1 ? "Partial entry conditions met" : "No entry conditions met"
+    table.cell(conf_tbl, 0, ent_row, "Entry", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ent_tip)
+    table.cell(conf_tbl, 1, ent_row, str.tostring(entry_score) + "/4", text_color=entry_score > 0 ? COLOR_BULL : COLOR_NEUTRAL, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=ent_tip)
     table.cell(conf_tbl, 2, ent_row, "", bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 3, ent_row, "", bgcolor=COLOR_TABLE_BG)
     table.merge_cells(conf_tbl, 1, ent_row, 3, ent_row)
@@ -1522,8 +1595,9 @@ if show_confluence_table and barstate.islast
 
     // Direction (last - the conclusion)
     int dir_row = row
-    table.cell(conf_tbl, 0, dir_row, "Direction", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
-    table.cell(conf_tbl, 1, dir_row, conf_dir_text, text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG)
+    dir_tip = conf_direction == 1 ? "Bullish: " + str.tostring(conf_bull_align) + " cross-TF alignments favor longs" : conf_direction == -1 ? "Bearish: " + str.tostring(conf_bear_align) + " cross-TF alignments favor shorts" : "No directional bias - cross-TF alignments are balanced"
+    table.cell(conf_tbl, 0, dir_row, "Direction", text_color=color.white, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=dir_tip)
+    table.cell(conf_tbl, 1, dir_row, conf_dir_text, text_color=conf_dir_color, text_size=conf_size, bgcolor=COLOR_TABLE_BG, tooltip=dir_tip)
     table.cell(conf_tbl, 2, dir_row, "", bgcolor=COLOR_TABLE_BG)
     table.cell(conf_tbl, 3, dir_row, "", bgcolor=COLOR_TABLE_BG)
     table.merge_cells(conf_tbl, 1, dir_row, 3, dir_row)
