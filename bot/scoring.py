@@ -264,9 +264,7 @@ def compute_scores(symbol: str = "BTC/USDT", exchange: str = "kraken") -> Dashbo
         ema_confirm_count = 0
         if scores.direction != 0:
             d_val = scores.direction
-            ema_confirm_count = (
-                int(w.ema == d_val) + int(d.ema == d_val) + int(h4.ema == d_val) + int(h1.ema == d_val)
-            )
+            ema_confirm_count = int(w.ema == d_val) + int(d.ema == d_val) + int(h4.ema == d_val) + int(h1.ema == d_val)
         ema_confirmed = ema_confirm_count >= 3
 
         # Total score (max 5)
@@ -347,7 +345,11 @@ def compute_scores(symbol: str = "BTC/USDT", exchange: str = "kraken") -> Dashbo
 
         # Entry score (max 5)
         scores.entry_score = (
-            int(entry_15m5m) + int(entry_5m1m) + int(entry_all_ltf) + int(entry_ema_confirmed) + (1 if scores.fvg_active else 0)
+            int(entry_15m5m)
+            + int(entry_5m1m)
+            + int(entry_all_ltf)
+            + int(entry_ema_confirmed)
+            + (1 if scores.fvg_active else 0)
         )
 
         # Store details
