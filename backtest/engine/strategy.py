@@ -30,7 +30,7 @@ class StrategyConfig:
     rr_ratio: float = 3.0
     sl_buffer_atr: float = 0.5
     atr_period: int = 20
-    min_score: int = 5
+    min_score: int = 4
     max_daily_losses: int = 3
     commission_pct: float = 0.1
     slippage_pct: float = 0.05
@@ -50,46 +50,50 @@ def compute_confluence(
     ema_4h: pd.Series,
     ema_1h: pd.Series,
 ) -> tuple[pd.Series, pd.Series]:
-    """Compute 7-factor confluence: cross-TF alignment (essential) + same-TF match (nice-to-have).
-    Returns (score, direction) series. Max score = 7.
+    """Compute 5-factor confluence: cross-TF alignment + all-same bonus + EMA confirmation.
+    Returns (score, direction) series. Max score = 5.
     """
-    # Essential: cross-TF CHoCH alignment
+    # Cross-TF CHoCH alignment (neutral TFs don't block)
     wd_aligned = (choch_w != 0) & (choch_d != 0) & (choch_w == choch_d)
     d4h_aligned = (choch_d != 0) & (choch_4h != 0) & (choch_d == choch_4h)
     h4h1h_aligned = (choch_4h != 0) & (choch_1h != 0) & (choch_4h == choch_1h)
 
-    # Nice-to-have: same-TF CHoCH + EMA match
-    w_match = (choch_w != 0) & (ema_w != 0) & (choch_w == ema_w)
-    d_match = (choch_d != 0) & (ema_d != 0) & (choch_d == ema_d)
-    h4_match = (choch_4h != 0) & (ema_4h != 0) & (choch_4h == ema_4h)
-    h1_match = (choch_1h != 0) & (ema_1h != 0) & (choch_1h == ema_1h)
-
-    # Score
-    score = (
-        wd_aligned.astype(int)
-        + d4h_aligned.astype(int)
-        + h4h1h_aligned.astype(int)
-        + w_match.astype(int)
-        + d_match.astype(int)
-        + h4_match.astype(int)
-        + h1_match.astype(int)
+    # All 4 same direction bonus
+    all_same = (
+        (choch_w != 0)
+        & (choch_d != 0)
+        & (choch_4h != 0)
+        & (choch_1h != 0)
+        & (choch_w == choch_d)
+        & (choch_d == choch_4h)
+        & (choch_4h == choch_1h)
     )
 
-    # Direction from alignment chain
-    bull_align = (
-        (wd_aligned & (choch_w == 1)).astype(int)
-        + (d4h_aligned & (choch_d == 1)).astype(int)
-        + (h4h1h_aligned & (choch_4h == 1)).astype(int)
-    )
-    bear_align = (
-        (wd_aligned & (choch_w == -1)).astype(int)
-        + (d4h_aligned & (choch_d == -1)).astype(int)
-        + (h4h1h_aligned & (choch_4h == -1)).astype(int)
-    )
+    # Base score (max 4)
+    base_score = wd_aligned.astype(int) + d4h_aligned.astype(int) + h4h1h_aligned.astype(int) + all_same.astype(int)
+
+    # Direction: Primary (W→D→4H) or Secondary (D→4H→1H unanimous)
+    primary_bull = wd_aligned & d4h_aligned & (choch_w == 1)
+    primary_bear = wd_aligned & d4h_aligned & (choch_w == -1)
+    secondary_bull = ~primary_bull & d4h_aligned & h4h1h_aligned & (choch_d == 1) & (choch_4h == 1) & (choch_1h == 1)
+    secondary_bear = ~primary_bear & d4h_aligned & h4h1h_aligned & (choch_d == -1) & (choch_4h == -1) & (choch_1h == -1)
 
     direction = pd.Series(0, index=df.index, dtype=int)
-    direction[bull_align >= 2] = 1
-    direction[bear_align >= 2] = -1
+    direction[primary_bull | secondary_bull] = 1
+    direction[primary_bear | secondary_bear] = -1
+
+    # EMA confirmation: 3+ EMAs confirm direction (+1)
+    ema_bull = (
+        (ema_w == 1).astype(int) + (ema_d == 1).astype(int) + (ema_4h == 1).astype(int) + (ema_1h == 1).astype(int)
+    )
+    ema_bear = (
+        (ema_w == -1).astype(int) + (ema_d == -1).astype(int) + (ema_4h == -1).astype(int) + (ema_1h == -1).astype(int)
+    )
+    ema_confirmed = pd.Series(0, index=df.index, dtype=int)
+    ema_confirmed[(direction == 1) & (ema_bull >= 3)] = 1
+    ema_confirmed[(direction == -1) & (ema_bear >= 3)] = 1
+
+    score = base_score + ema_confirmed
 
     return score, direction
 

@@ -7,6 +7,7 @@ Uses the same indicator logic as the backtest engine for consistency.
 import logging
 import os
 import sys
+import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -19,6 +20,42 @@ from engine.data import fetch_ohlcv
 from engine.indicators import choch_bos, compute_ema_alignment, detect_fvg
 
 logger = logging.getLogger("nexus.scoring")
+
+# --- Data Cache ---
+# Cache fetched data to avoid Kraken rate limits.
+# Each TF has its own cache TTL (higher TFs change less often).
+_cache = {}  # {tf: {"data": df, "expires": timestamp}}
+CACHE_TTL = {
+    "1w": 3600,  # Weekly: cache 1 hour
+    "1d": 600,  # Daily: cache 10 min
+    "4h": 300,  # 4H: cache 5 min
+    "1h": 120,  # 1H: cache 2 min
+    "15m": 60,  # 15m: cache 1 min
+    "5m": 30,  # 5m: cache 30 sec
+    "1m": 15,  # 1m: cache 15 sec
+}
+
+
+def _fetch_cached(symbol: str, tf: str, exchange: str) -> pd.DataFrame:
+    """Fetch OHLCV with per-TF caching to avoid rate limits."""
+    cache_key = f"{symbol}_{tf}_{exchange}"
+    now = _time.time()
+
+    if cache_key in _cache and now < _cache[cache_key]["expires"]:
+        return _cache[cache_key]["data"]
+
+    try:
+        df = fetch_ohlcv(symbol, tf, exchange, limit=500, use_cache=False)
+        ttl = CACHE_TTL.get(tf, 60)
+        _cache[cache_key] = {"data": df, "expires": now + ttl}
+        return df
+    except Exception as e:
+        logger.warning(f"Fetch failed for {tf}: {e}")
+        # Return stale cache if available
+        if cache_key in _cache:
+            return _cache[cache_key]["data"]
+        return pd.DataFrame()
+
 
 # Timeframes for confluence (HTF)
 CONFLUENCE_TFS = ["1w", "1d", "4h", "1h"]
@@ -53,23 +90,31 @@ class DashboardScores:
 
     # Confluence (HTF)
     confluence_tfs: list = field(default_factory=list)  # list of TFBias
-    conf_w_score: int = 0
-    conf_d_score: int = 0
-    conf_4h_score: int = 0
-    conf_1h_score: int = 0
-    confluence_score: int = 0  # max 7
+    confluence_score: int = 0  # max 5
 
     # Direction
-    bull_align: int = 0
-    bear_align: int = 0
     direction: int = 0  # 1=long, -1=short, 0=neutral
     direction_text: str = "NEUTRAL"
 
+    # Confluence details (for tooltip)
+    wd_aligned: bool = False
+    d4h_aligned: bool = False
+    h4h1h_aligned: bool = False
+    all_same: bool = False
+    ema_confirm_count: int = 0
+    ema_confirmed: bool = False
+    is_primary: bool = False
+    is_secondary: bool = False
+
     # Entry (LTF)
     entry_tfs: list = field(default_factory=list)  # list of TFBias
-    entry_15m_score: int = 0
-    entry_5m_score: int = 0
-    entry_1m_score: int = 0
+
+    # Entry details (for tooltip)
+    entry_15m5m_aligned: bool = False
+    entry_5m1m_aligned: bool = False
+    entry_all_ltf: bool = False
+    entry_ema_count: int = 0
+    entry_ema_confirmed: bool = False
 
     # FVG
     fvg_active: bool = False
@@ -78,7 +123,7 @@ class DashboardScores:
     fvg_top: float = 0.0
     fvg_bottom: float = 0.0
 
-    entry_score: int = 0  # max 7
+    entry_score: int = 0  # max 5
 
     # Session
     session: str = "Off Hours"
@@ -147,11 +192,11 @@ def compute_scores(symbol: str = "BTC/USDT", exchange: str = "kraken") -> Dashbo
     scores = DashboardScores(symbol=symbol, timestamp=datetime.utcnow().isoformat())
 
     try:
-        # Fetch data for all timeframes
+        # Fetch data for all timeframes (cached to avoid rate limits)
         tf_data = {}
         for tf in CONFLUENCE_TFS + ENTRY_TFS + FVG_TFS:
             if tf not in tf_data:
-                tf_data[tf] = fetch_ohlcv(symbol, tf, exchange, limit=500, use_cache=False)
+                tf_data[tf] = _fetch_cached(symbol, tf, exchange)
 
         # Current price from shortest timeframe
         shortest_tf = ENTRY_TFS[-1]  # 1m
@@ -173,45 +218,69 @@ def compute_scores(symbol: str = "BTC/USDT", exchange: str = "kraken") -> Dashbo
         h4 = bias["4h"]
         h1 = bias["1h"]
 
-        # Essential: cross-TF alignment
+        # Cross-TF CHoCH alignment (neutral TFs don't block)
         wd_aligned = w.choch != 0 and d.choch != 0 and w.choch == d.choch
         d4h_aligned = d.choch != 0 and h4.choch != 0 and d.choch == h4.choch
         h4h1_aligned = h4.choch != 0 and h1.choch != 0 and h4.choch == h1.choch
 
-        # Nice-to-have: same-TF match
-        w_match = w.choch != 0 and w.ema != 0 and w.choch == w.ema
-        d_match = d.choch != 0 and d.ema != 0 and d.choch == d.ema
-        h4_match = h4.choch != 0 and h4.ema != 0 and h4.choch == h4.ema
-        h1_match = h1.choch != 0 and h1.ema != 0 and h1.choch == h1.ema
-
-        # Per-row scores
-        scores.conf_w_score = int(w_match)
-        scores.conf_d_score = int(d_match) + int(wd_aligned)
-        scores.conf_4h_score = int(h4_match) + int(d4h_aligned)
-        scores.conf_1h_score = int(h1_match) + int(h4h1_aligned)
-        scores.confluence_score = (
-            scores.conf_w_score + scores.conf_d_score + scores.conf_4h_score + scores.conf_1h_score
+        # All 4 same direction bonus
+        all_same = (
+            w.choch != 0
+            and d.choch != 0
+            and h4.choch != 0
+            and h1.choch != 0
+            and w.choch == d.choch
+            and d.choch == h4.choch
+            and h4.choch == h1.choch
         )
 
-        # Direction: requires 2+ alignments
-        scores.bull_align = (
-            int(wd_aligned and w.choch == 1) + int(d4h_aligned and d.choch == 1) + int(h4h1_aligned and h4.choch == 1)
+        # Base score (max 4)
+        base_score = int(wd_aligned) + int(d4h_aligned) + int(h4h1_aligned) + int(all_same)
+
+        # Direction: Primary (W→D→4H) or Secondary (D→4H→1H unanimous)
+        primary_bull = wd_aligned and d4h_aligned and w.choch == 1
+        primary_bear = wd_aligned and d4h_aligned and w.choch == -1
+        secondary_bull = (
+            not primary_bull and d4h_aligned and h4h1_aligned and d.choch == 1 and h4.choch == 1 and h1.choch == 1
         )
-        scores.bear_align = (
-            int(wd_aligned and w.choch == -1)
-            + int(d4h_aligned and d.choch == -1)
-            + int(h4h1_aligned and h4.choch == -1)
+        secondary_bear = (
+            not primary_bear and d4h_aligned and h4h1_aligned and d.choch == -1 and h4.choch == -1 and h1.choch == -1
         )
 
-        if scores.bull_align >= 2:
+        is_primary = primary_bull or primary_bear
+        is_secondary = secondary_bull or secondary_bear
+
+        if primary_bull or secondary_bull:
             scores.direction = 1
             scores.direction_text = "LONG"
-        elif scores.bear_align >= 2:
+        elif primary_bear or secondary_bear:
             scores.direction = -1
             scores.direction_text = "SHORT"
         else:
             scores.direction = 0
             scores.direction_text = "NEUTRAL"
+
+        # EMA confirmation: 3+ EMAs confirm direction
+        ema_confirm_count = 0
+        if scores.direction != 0:
+            d_val = scores.direction
+            ema_confirm_count = (
+                int(w.ema == d_val) + int(d.ema == d_val) + int(h4.ema == d_val) + int(h1.ema == d_val)
+            )
+        ema_confirmed = ema_confirm_count >= 3
+
+        # Total score (max 5)
+        scores.confluence_score = base_score + int(ema_confirmed)
+
+        # Store details for tooltip
+        scores.wd_aligned = wd_aligned
+        scores.d4h_aligned = d4h_aligned
+        scores.h4h1h_aligned = h4h1_aligned
+        scores.all_same = all_same
+        scores.ema_confirm_count = ema_confirm_count
+        scores.ema_confirmed = ema_confirmed
+        scores.is_primary = is_primary
+        scores.is_secondary = is_secondary
 
         # === ENTRY (LTF) ===
         entry_bias = {}
@@ -223,12 +292,46 @@ def compute_scores(symbol: str = "BTC/USDT", exchange: str = "kraken") -> Dashbo
 
         scores.entry_tfs = [entry_bias[tf] for tf in ENTRY_TFS]
 
-        # LTF scoring: CHoCH + EMA match with direction
-        for tf, attr in [("15m", "entry_15m_score"), ("5m", "entry_5m_score"), ("1m", "entry_1m_score")]:
-            b = entry_bias[tf]
-            choch_ok = (scores.direction == 1 and b.choch == 1) or (scores.direction == -1 and b.choch == -1)
-            ema_ok = (scores.direction == 1 and b.ema == 1) or (scores.direction == -1 and b.ema == -1)
-            setattr(scores, attr, int(choch_ok) + int(ema_ok))
+        e15 = entry_bias["15m"]
+        e5 = entry_bias["5m"]
+        e1 = entry_bias["1m"]
+        d_val = scores.direction
+
+        # LTF CHoCH chain alignment with direction
+        entry_15m5m = (
+            e15.choch != 0
+            and e5.choch != 0
+            and e15.choch == e5.choch
+            and ((d_val == 1 and e15.choch == 1) or (d_val == -1 and e15.choch == -1))
+        )
+        entry_5m1m = (
+            e5.choch != 0
+            and e1.choch != 0
+            and e5.choch == e1.choch
+            and ((d_val == 1 and e5.choch == 1) or (d_val == -1 and e5.choch == -1))
+        )
+
+        # All 3 LTF CHoCH confirm direction
+        entry_all_ltf = (
+            d_val != 0
+            and e15.choch != 0
+            and e5.choch != 0
+            and e1.choch != 0
+            and (
+                (d_val == 1 and e15.choch == 1 and e5.choch == 1 and e1.choch == 1)
+                or (d_val == -1 and e15.choch == -1 and e5.choch == -1 and e1.choch == -1)
+            )
+        )
+
+        # 3/3 LTF EMAs confirm direction
+        entry_ema_count = 0
+        if d_val != 0:
+            entry_ema_count = (
+                int((d_val == 1 and e15.ema == 1) or (d_val == -1 and e15.ema == -1))
+                + int((d_val == 1 and e5.ema == 1) or (d_val == -1 and e5.ema == -1))
+                + int((d_val == 1 and e1.ema == 1) or (d_val == -1 and e1.ema == -1))
+            )
+        entry_ema_confirmed = entry_ema_count >= 3
 
         # === FVG ===
         for fvg_tf in FVG_TFS:
@@ -242,10 +345,17 @@ def compute_scores(symbol: str = "BTC/USDT", exchange: str = "kraken") -> Dashbo
                 scores.fvg_bottom = btm
                 break  # Highest TF wins (4H > 1H > 15m)
 
-        # Entry total
+        # Entry score (max 5)
         scores.entry_score = (
-            (1 if scores.fvg_active else 0) + scores.entry_15m_score + scores.entry_5m_score + scores.entry_1m_score
+            int(entry_15m5m) + int(entry_5m1m) + int(entry_all_ltf) + int(entry_ema_confirmed) + (1 if scores.fvg_active else 0)
         )
+
+        # Store details
+        scores.entry_15m5m_aligned = entry_15m5m
+        scores.entry_5m1m_aligned = entry_5m1m
+        scores.entry_all_ltf = entry_all_ltf
+        scores.entry_ema_count = entry_ema_count
+        scores.entry_ema_confirmed = entry_ema_confirmed
 
         # Session
         scores.session = _detect_session()

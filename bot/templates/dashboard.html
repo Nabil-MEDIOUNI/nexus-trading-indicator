@@ -142,11 +142,10 @@
                         <th></th>
                         <th>CHoCH</th>
                         <th>EMA</th>
-                        <th>Score</th>
                     </tr>
                 </thead>
                 <tbody id="confluence-body">
-                    <tr><td colspan="4" class="neutral">Loading...</td></tr>
+                    <tr><td colspan="3" class="neutral">Loading...</td></tr>
                 </tbody>
             </table>
             <div class="session-row">
@@ -168,11 +167,10 @@
                         <th></th>
                         <th>CHoCH</th>
                         <th>EMA</th>
-                        <th>Score</th>
                     </tr>
                 </thead>
                 <tbody id="entry-body">
-                    <tr><td colspan="4" class="neutral">Loading...</td></tr>
+                    <tr><td colspan="3" class="neutral">Loading...</td></tr>
                 </tbody>
             </table>
             <div id="fvg-row" class="summary-row">
@@ -230,42 +228,40 @@
 
             // Confluence table
             const confTFs = data.confluence_tfs;
-            const confScores = [data.conf_w_score, data.conf_d_score, data.conf_4h_score, data.conf_1h_score];
-            const confMax = [1, 2, 2, 2];
             let confHTML = '';
             for (let i = 0; i < confTFs.length; i++) {
                 const tf = confTFs[i];
-                confHTML += '<tr>' +
-                    '<td>' + tf.timeframe + '</td>' +
-                    '<td>' + arrow(tf.choch) + '</td>' +
-                    '<td>' + arrow(tf.ema) + '</td>' +
-                    '<td class="' + scoreColor(confScores[i]) + '">' + confScores[i] + '/' + confMax[i] + '</td>' +
-                    '</tr>';
+                confHTML += `<tr>
+                    <td>${tf.timeframe}</td>
+                    <td>${arrow(tf.choch)}</td>
+                    <td>${arrow(tf.ema)}</td>
+                </tr>`;
             }
             document.getElementById('confluence-body').innerHTML = confHTML;
 
             // Confluence score
-            document.getElementById('conf-score').textContent = data.confluence_score + '/7';
+            document.getElementById('conf-score').textContent = data.confluence_score + '/5';
 
             // Entry section visibility
             const entrySection = document.getElementById('entry-section');
-            if (data.direction === 0) {
+            const showEntry = data.direction !== 0 &&
+                ((data.is_primary && data.confluence_score >= 2) ||
+                 (data.is_secondary && data.confluence_score >= 3));
+            if (!showEntry) {
                 entrySection.classList.add('hidden');
             } else {
                 entrySection.classList.remove('hidden');
 
                 // Entry table
                 const entryTFs = data.entry_tfs;
-                const entryScores = [data.entry_15m_score, data.entry_5m_score, data.entry_1m_score];
                 let entryHTML = '';
                 for (let i = 0; i < entryTFs.length; i++) {
                     const tf = entryTFs[i];
-                    entryHTML += '<tr>' +
-                        '<td>' + tf.timeframe + '</td>' +
-                        '<td>' + arrow(tf.choch) + '</td>' +
-                        '<td>' + arrow(tf.ema) + '</td>' +
-                        '<td class="' + scoreColor(entryScores[i]) + '">' + entryScores[i] + '/2</td>' +
-                        '</tr>';
+                    entryHTML += `<tr>
+                        <td>${tf.timeframe}</td>
+                        <td>${arrow(tf.choch)}</td>
+                        <td>${arrow(tf.ema)}</td>
+                    </tr>`;
                 }
                 document.getElementById('entry-body').innerHTML = entryHTML;
 
@@ -279,7 +275,7 @@
                 }
 
                 // Entry score
-                document.getElementById('entry-score').textContent = data.entry_score + '/7';
+                document.getElementById('entry-score').textContent = data.entry_score + '/5';
             }
 
             // Direction

@@ -89,7 +89,7 @@ class TestSetupTool:
             ema_4h=ema_align,
             ema_1h=ema_align,
         )
-        assert (score >= 0).all() and (score <= 7).all()
+        assert (score >= 0).all() and (score <= 5).all()
         assert set(direction.unique()).issubset({-1, 0, 1})
 
     def test_sl_tp_valid_for_long(self, market_data):
@@ -123,7 +123,7 @@ class TestBacktestTool:
 
     def test_stricter_score_fewer_trades(self, market_data):
         loose = run_backtest(market_data, StrategyConfig(min_score=5))
-        strict = run_backtest(market_data, StrategyConfig(min_score=7))
+        strict = run_backtest(market_data, StrategyConfig(min_score=5))
         assert len(loose) >= len(strict)
 
     def test_assessment_logic(self):

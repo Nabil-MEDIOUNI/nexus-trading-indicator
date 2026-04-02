@@ -48,7 +48,7 @@ class TestRunBacktest:
     def test_custom_config(self, sample_ohlcv):
         config_loose = StrategyConfig(min_score=5, rr_ratio=2.0)
         trades_loose = run_backtest(sample_ohlcv, config_loose)
-        config_strict = StrategyConfig(min_score=7, rr_ratio=3.0)
+        config_strict = StrategyConfig(min_score=5, rr_ratio=3.0)
         trades_strict = run_backtest(sample_ohlcv, config_strict)
         # Both configs should produce valid trades with custom parameters
         assert isinstance(trades_loose, list)
@@ -64,7 +64,7 @@ class TestRunBacktest:
             assert t.exit_reason in ("SL", "TP")
 
     def test_flat_market_few_trades(self, flat_ohlcv):
-        config = StrategyConfig(min_score=6)
+        config = StrategyConfig(min_score=5)
         trades = run_backtest(flat_ohlcv, config)
         # Flat market with high threshold should produce very few trades
         assert len(trades) < 20
