@@ -88,8 +88,8 @@ def compute_confluence(
     )
 
     direction = pd.Series(0, index=df.index, dtype=int)
-    direction[bull_align > bear_align] = 1
-    direction[bear_align > bull_align] = -1
+    direction[bull_align >= 2] = 1
+    direction[bear_align >= 2] = -1
 
     return score, direction
 
