@@ -37,7 +37,7 @@ strat_max_daily     = input.int(3, "Max Losses Per Day", minval=1, maxval=10, gr
 strat_atr_period    = input.int(20, "ATR Period", minval=5, maxval=50, group="Strategy")
 
 // --- Confluence ---
-conf_min_score      = input.int(6, "Min Confluence Score", minval=1, maxval=9, group="Confluence")
+conf_min_score      = input.int(5, "Min Confluence Score", minval=1, maxval=7, group="Confluence")
 
 // --- SMC ---
 smc_swing_len = switch
@@ -281,22 +281,44 @@ bias_ema() =>
 bias_combined() =>
     [bias_choch(), bias_ema()]
 
-[bias_1h, ema_1h] = request.security(syminfo.tickerid, "60",  bias_combined())
-[bias_4h, ema_4h] = request.security(syminfo.tickerid, "240", bias_combined())
-[bias_d,  ema_d]  = request.security(syminfo.tickerid, "D",   bias_combined())
-[bias_w,  ema_w]  = request.security(syminfo.tickerid, "W",   bias_combined())
+bias_combined_confirmed() =>
+    choch = bias_choch()
+    ema = bias_ema()
+    [choch[1], ema[1]]
+
+[bias_1h, ema_1h] = request.security(syminfo.tickerid, "60",  bias_combined_confirmed(), lookahead=barmerge.lookahead_on)
+[bias_4h, ema_4h] = request.security(syminfo.tickerid, "240", bias_combined_confirmed(), lookahead=barmerge.lookahead_on)
+[bias_d,  ema_d]  = request.security(syminfo.tickerid, "D",   bias_combined_confirmed(), lookahead=barmerge.lookahead_on)
+[bias_w,  ema_w]  = request.security(syminfo.tickerid, "W",   bias_combined_confirmed(), lookahead=barmerge.lookahead_on)
 
 // ============================================================================
-//                       CONFLUENCE SCORER (9-factor)
+//                       CONFLUENCE SCORER (7-factor)
 // ============================================================================
 
-conf_bull_count = (bias_w == 1 ? 1 : 0) + (bias_d == 1 ? 1 : 0) + (bias_4h == 1 ? 1 : 0) + (bias_1h == 1 ? 1 : 0) + (ema_w == 1 ? 1 : 0) + (ema_d == 1 ? 1 : 0) + (ema_4h == 1 ? 1 : 0) + (ema_1h == 1 ? 1 : 0)
-conf_bear_count = (bias_w == -1 ? 1 : 0) + (bias_d == -1 ? 1 : 0) + (bias_4h == -1 ? 1 : 0) + (bias_1h == -1 ? 1 : 0) + (ema_w == -1 ? 1 : 0) + (ema_d == -1 ? 1 : 0) + (ema_4h == -1 ? 1 : 0) + (ema_1h == -1 ? 1 : 0)
+// Essential: Cross-TF CHoCH alignment
+conf_wd_aligned   = bias_w != 0 and bias_d != 0 and bias_w == bias_d
+conf_d4h_aligned  = bias_d != 0 and bias_4h != 0 and bias_d == bias_4h
+conf_4h1h_aligned = bias_4h != 0 and bias_1h != 0 and bias_4h == bias_1h
 
-conf_ses = timeframe.isintraday ? ((nz(time(timeframe.period, "1300-2200", syminfo.timezone)) > 0 or nz(time(timeframe.period, "0700-1600", syminfo.timezone)) > 0) ? 1 : 0) : 1
+// Nice-to-have: Same-TF CHoCH + EMA match
+conf_w_match  = bias_w != 0 and ema_w != 0 and bias_w == ema_w
+conf_d_match  = bias_d != 0 and ema_d != 0 and bias_d == ema_d
+conf_4h_match = bias_4h != 0 and ema_4h != 0 and bias_4h == ema_4h
+conf_1h_match = bias_1h != 0 and ema_1h != 0 and bias_1h == ema_1h
 
-conf_direction = conf_bull_count > conf_bear_count ? 1 : conf_bear_count > conf_bull_count ? -1 : 0
-conf_score = (conf_direction == 1 ? conf_bull_count : conf_direction == -1 ? conf_bear_count : 0) + conf_ses
+// Per-row scores
+conf_w_score  = (conf_w_match ? 1 : 0)
+conf_d_score  = (conf_d_match ? 1 : 0) + (conf_wd_aligned ? 1 : 0)
+conf_4h_score = (conf_4h_match ? 1 : 0) + (conf_d4h_aligned ? 1 : 0)
+conf_1h_score = (conf_1h_match ? 1 : 0) + (conf_4h1h_aligned ? 1 : 0)
+
+// Total confluence score (max 7)
+conf_score = conf_w_score + conf_d_score + conf_4h_score + conf_1h_score
+
+// Direction: requires 2+ cross-TF alignments
+conf_bull_align = (conf_wd_aligned and bias_w == 1 ? 1 : 0) + (conf_d4h_aligned and bias_d == 1 ? 1 : 0) + (conf_4h1h_aligned and bias_4h == 1 ? 1 : 0)
+conf_bear_align = (conf_wd_aligned and bias_w == -1 ? 1 : 0) + (conf_d4h_aligned and bias_d == -1 ? 1 : 0) + (conf_4h1h_aligned and bias_4h == -1 ? 1 : 0)
+conf_direction = conf_bull_align >= 2 ? 1 : conf_bear_align >= 2 ? -1 : 0
 
 // ============================================================================
 //                       ENTRY / EXIT LOGIC
