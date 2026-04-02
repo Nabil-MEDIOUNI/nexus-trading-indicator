@@ -12,6 +12,7 @@ TradingView alert webhook URL: http://<your-ip>:5000/webhook
 import logging
 
 from config import Config
+from dashboard import dashboard_bp
 from executor import Executor
 from flask import Flask, jsonify, request
 from journal import Journal
@@ -24,6 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger("nexus.bot")
 
 app = Flask(__name__)
+app.register_blueprint(dashboard_bp)
 config = Config()
 executor = Executor(config)
 risk = RiskEngine(config)

@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #131722;
+            color: #d1d4dc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            justify-content: center;
+            padding: 20px;
+        }
+        .dashboard {
+            max-width: 420px;
+            width: 100%;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding: 12px 16px;
+            background: #1e222d;
+            border-radius: 8px;
+            border: 1px solid #363a45;
+        }
+        .symbol { font-size: 18px; font-weight: 600; color: #fff; }
+        .price { font-size: 18px; font-weight: 600; }
+        .meta { font-size: 11px; color: #787b86; margin-top: 4px; }
+
+        .section {
+            background: #1e222d;
+            border: 1px solid #363a45;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            overflow: hidden;
+        }
+        .section-title {
+            padding: 8px 16px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #787b86;
+            border-bottom: 1px solid #363a45;
+        }
+
+        table { width: 100%; border-collapse: collapse; }
+        th, td {
+            padding: 6px 12px;
+            font-size: 13px;
+            text-align: center;
+            border-bottom: 1px solid #2a2e39;
+        }
+        th { color: #787b86; font-weight: 500; font-size: 11px; }
+        td:first-child, th:first-child { text-align: left; color: #d1d4dc; }
+        tr:last-child td { border-bottom: none; }
+
+        .bull { color: #22ab94; }
+        .bear { color: #f7525f; }
+        .neutral { color: #787b86; }
+
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 16px;
+            border-bottom: 1px solid #2a2e39;
+        }
+        .summary-row:last-child { border-bottom: none; }
+        .summary-label { color: #787b86; font-size: 13px; }
+        .summary-value { font-size: 14px; font-weight: 600; }
+
+        .direction-box {
+            padding: 12px 16px;
+            text-align: center;
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+
+        .session-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 16px;
+        }
+
+        .hidden { display: none; }
+
+        .status {
+            font-size: 11px;
+            color: #787b86;
+            text-align: center;
+            padding: 8px;
+        }
+        .status.connected { color: #22ab94; }
+        .status.error { color: #f7525f; }
+
+        .tooltip {
+            position: relative;
+            cursor: help;
+        }
+        .tooltip:hover::after {
+            content: attr(data-tip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #363a45;
+            color: #d1d4dc;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            white-space: nowrap;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Header -->
+        <div class="header">
+            <div>
+                <div class="symbol" id="symbol">{{ symbol }}</div>
+                <div class="meta" id="meta">Connecting...</div>
+            </div>
+            <div>
+                <div class="price" id="price">&mdash;</div>
+                <div class="meta" id="session">&mdash;</div>
+            </div>
+        </div>
+
+        <!-- Confluence Section -->
+        <div class="section">
+            <div class="section-title">Confluence</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>CHoCH</th>
+                        <th>EMA</th>
+                        <th>Score</th>
+                    </tr>
+                </thead>
+                <tbody id="confluence-body">
+                    <tr><td colspan="4" class="neutral">Loading...</td></tr>
+                </tbody>
+            </table>
+            <div class="session-row">
+                <span class="summary-label">Session</span>
+                <span id="session-label" class="bull">&mdash;</span>
+            </div>
+            <div class="summary-row">
+                <span class="summary-label">Confluence</span>
+                <span class="summary-value" id="conf-score">&mdash;</span>
+            </div>
+        </div>
+
+        <!-- Entry Section (hidden when NEUTRAL) -->
+        <div class="section" id="entry-section">
+            <div class="section-title">Entry</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>CHoCH</th>
+                        <th>EMA</th>
+                        <th>Score</th>
+                    </tr>
+                </thead>
+                <tbody id="entry-body">
+                    <tr><td colspan="4" class="neutral">Loading...</td></tr>
+                </tbody>
+            </table>
+            <div id="fvg-row" class="summary-row">
+                <span class="summary-label">FVG Zone</span>
+                <span id="fvg-status" class="neutral">&mdash;</span>
+            </div>
+            <div class="summary-row">
+                <span class="summary-label">Entry</span>
+                <span class="summary-value" id="entry-score">&mdash;</span>
+            </div>
+        </div>
+
+        <!-- Summary / Direction -->
+        <div class="section">
+            <div class="section-title">Summary</div>
+            <div class="direction-box" id="direction">NEUTRAL</div>
+        </div>
+
+        <div class="status" id="status">Connecting...</div>
+    </div>
+
+    <script>
+        const POLL_INTERVAL = 5000; // 5 seconds
+
+        function arrow(val) {
+            if (val === 1) return '<span class="bull">&#9650;</span>';
+            if (val === -1) return '<span class="bear">&#9660;</span>';
+            return '<span class="neutral">&mdash;</span>';
+        }
+
+        function scoreColor(score, max) {
+            return score > 0 ? 'bull' : 'neutral';
+        }
+
+        function dirColor(dir) {
+            if (dir === 1) return 'bull';
+            if (dir === -1) return 'bear';
+            return 'neutral';
+        }
+
+        function updateDashboard(data) {
+            // Price
+            document.getElementById('price').textContent = data.price.toLocaleString('en-US', {minimumFractionDigits: 2});
+            document.getElementById('price').className = 'price';
+
+            // Meta
+            document.getElementById('meta').textContent = 'Updated: ' + new Date(data.timestamp + 'Z').toLocaleTimeString();
+
+            // Session
+            const sesActive = data.session !== 'Off Hours';
+            document.getElementById('session').textContent = data.session;
+            document.getElementById('session').className = 'meta ' + (sesActive ? 'bull' : 'neutral');
+            document.getElementById('session-label').textContent = data.session;
+            document.getElementById('session-label').className = sesActive ? 'bull' : 'neutral';
+
+            // Confluence table
+            const confTFs = data.confluence_tfs;
+            const confScores = [data.conf_w_score, data.conf_d_score, data.conf_4h_score, data.conf_1h_score];
+            const confMax = [1, 2, 2, 2];
+            let confHTML = '';
+            for (let i = 0; i < confTFs.length; i++) {
+                const tf = confTFs[i];
+                confHTML += '<tr>' +
+                    '<td>' + tf.timeframe + '</td>' +
+                    '<td>' + arrow(tf.choch) + '</td>' +
+                    '<td>' + arrow(tf.ema) + '</td>' +
+                    '<td class="' + scoreColor(confScores[i]) + '">' + confScores[i] + '/' + confMax[i] + '</td>' +
+                    '</tr>';
+            }
+            document.getElementById('confluence-body').innerHTML = confHTML;
+
+            // Confluence score
+            document.getElementById('conf-score').textContent = data.confluence_score + '/7';
+
+            // Entry section visibility
+            const entrySection = document.getElementById('entry-section');
+            if (data.direction === 0) {
+                entrySection.classList.add('hidden');
+            } else {
+                entrySection.classList.remove('hidden');
+
+                // Entry table
+                const entryTFs = data.entry_tfs;
+                const entryScores = [data.entry_15m_score, data.entry_5m_score, data.entry_1m_score];
+                let entryHTML = '';
+                for (let i = 0; i < entryTFs.length; i++) {
+                    const tf = entryTFs[i];
+                    entryHTML += '<tr>' +
+                        '<td>' + tf.timeframe + '</td>' +
+                        '<td>' + arrow(tf.choch) + '</td>' +
+                        '<td>' + arrow(tf.ema) + '</td>' +
+                        '<td class="' + scoreColor(entryScores[i]) + '">' + entryScores[i] + '/2</td>' +
+                        '</tr>';
+                }
+                document.getElementById('entry-body').innerHTML = entryHTML;
+
+                // FVG
+                if (data.fvg_active) {
+                    document.getElementById('fvg-status').textContent = 'At ' + data.fvg_tf + ' FVG';
+                    document.getElementById('fvg-status').className = 'bull';
+                } else {
+                    document.getElementById('fvg-status').textContent = 'Not yet';
+                    document.getElementById('fvg-status').className = 'neutral';
+                }
+
+                // Entry score
+                document.getElementById('entry-score').textContent = data.entry_score + '/7';
+            }
+
+            // Direction
+            const dirEl = document.getElementById('direction');
+            let dirText = data.direction_text;
+            if (data.direction === 1) dirText += ' \u25B2';
+            else if (data.direction === -1) dirText += ' \u25BC';
+            dirEl.textContent = dirText;
+            dirEl.className = 'direction-box ' + dirColor(data.direction);
+
+            // Status
+            document.getElementById('status').textContent = 'Live \u2022 Updates every 5s';
+            document.getElementById('status').className = 'status connected';
+        }
+
+        async function fetchScores() {
+            try {
+                const res = await fetch('/api/scores');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                updateDashboard(data);
+            } catch (err) {
+                document.getElementById('status').textContent = 'Error: ' + err.message;
+                document.getElementById('status').className = 'status error';
+            }
+        }
+
+        // Initial fetch + polling
+        fetchScores();
+        setInterval(fetchScores, POLL_INTERVAL);
+    </script>
+</body>
+</html>
